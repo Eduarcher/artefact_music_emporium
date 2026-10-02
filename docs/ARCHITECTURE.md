@@ -1,153 +1,207 @@
 # Architecture
 
-This document describes the system design of the Artefact Music Emporium customer-service agent: how its components are organized, how they interact, and why each technology was chosen. The requirements that motivate these decisions live in [REQUIREMENTS.md](./REQUIREMENTS.md) and are referenced here by identifier (`FR1`, `NFR4`, and so on). Unresolved decisions are tracked in [OPEN_QUESTIONS.md](./OPEN_QUESTIONS.md).
+## 1. Document Scope
+This document describes the system design of the Artefact Music Emporium customer-service agent: how its components are organized, how they interact, and why each technology was chosen. The requirements that motivate these decisions live in [REQUIREMENTS.md](./REQUIREMENTS.md) and are referenced here by identifier.
 
-## 1. Scope
-
-This document covers system design only: component boundaries, the request lifecycle, the data layer, and the technology choices. It does not restate the business problem or the requirements. Trade-offs are called out inline where a decision was made over an alternative.
+Each major decision records the problem, the chosen approach, and the trade-off. This makes deliberate case-study assumptions distinguishable from production requirements.
 
 ## 2. System overview
 
-The system is a set of five containerized services behind `docker compose`.
+The system is a set of five containerized services behind `docker compose`:
 
-- The **frontend** is a Chainlit application. It contains no agent logic; it renders the chat, forwards user messages to the backend over HTTP, and renders the streamed response. Its only state is presentation-scoped (for example, runtime model selection exposed through the Chainlit settings panel).
-- The **backend** is a FastAPI service that owns all intelligence: the LangGraph agent, the RAG pipeline, guardrails, caching, and prompt resolution. It hosts the MCP client that binds the database tools into the agent. It exposes a JSON/SSE API so any client can drive the agent; Chainlit is the reference UI, not a hard dependency.
-- The **mcp-server** is the agent's only access path to structured operational data. It exposes read-only tools (product, order, customer, promotion lookups) over the Model Context Protocol and queries Postgres on the backend's behalf.
-- **Postgres** (with the pgvector extension) is the single datastore, holding the relational operational data, the vector embeddings of the policy manual, and persisted chat sessions.
-- **Ollama** runs the local models used by default for generation and embeddings. When configured, requests can instead route to hosted providers (Claude, OpenAI) through LiteLLM.
+- **Frontend:** Chainlit renders the chat and administrative settings. It forwards messages to the backend and renders status and response events. The local admin view selects the simulated customer and model for a new conversation.
+- **Backend:** FastAPI owns the agent runtime, LangGraph workflow, prompt resolution, RAG retrieval, session context, and the API exposed to the frontend.
+- **MCP server:** The only operational-data access path available to the agent. It exposes read-only, typed tools and queries Postgres.
+- **Postgres:** The single datastore for operational tables, policy embeddings, sessions, and the complete raw chat transcript.
+- **Ollama (OPTIONAL):** The default local model and embedding runtime. LiteLLM can route to one of the explicitly configured alternative providers for the study case. Ollama is optional but installed by default.
 
-## 3. Technology stack
+## 3. Identity, sessions, and privacy boundary
 
-Each choice below records its rationale and, where relevant, the requirement it addresses.
+### 3.1 Local customer selection
 
-### 3.1 Orchestration — LangGraph
+The prototype does not implement customer login. The admin page contains a selectbox populated from the small customer dataset. Selecting a customer starts a new conversation session.
 
-LangGraph models the agent as a state machine: a typed state object, a set of nodes (functions that read and mutate state), and conditional edges that route between nodes. This is the mechanism behind `FR2`. Two capabilities in particular justify the dependency over hand-rolling orchestration:
+The backend validates the selected customer ID once and stores a binding between a newly generated opaque `session_id` and that customer. Every subsequent chat request carries only the `session_id`; it does not carry a customer ID selected by the model or repeated by the frontend.
 
-- **Checkpointing.** Every state transition is persisted through a checkpointer. Keyed by `thread_id` (mapped from our `session_id`), this provides per-session memory (`FR5`) and strict isolation between clients (`NFR3`). We use the Postgres checkpointer so session state lives in the same database as the rest of the system.
-- **Tool routing.** The graph binds tools and lets the model decide when to invoke them, feeding results back into the graph — the control loop we would otherwise have to write ourselves.
+This is a deliberate study-case compromise: it allows safe, repeatable testing with any fixture customer without building authentication. It is not an authentication mechanism. A production system would replace the selector with authenticated identity resolution, authorization, retention controls, and audit logging.
 
-### 3.2 Model access — LiteLLM
+Changing the selected customer creates a new session. An existing session is never reassigned to another customer. This prevents accidental cross-session mixing inside the prototype, while the documented admin-only assumption keeps the interface appropriate for local testing.
 
-LiteLLM is pinned as the single gateway to every provider. It normalizes the chat-completions interface, so moving between Ollama, Claude, and OpenAI is a configuration change rather than a code change. This is what makes the hybrid strategy inexpensive: the default path is a local Ollama model (no API keys, works offline — `NFR5`), and hosted providers are used only when their keys are present. LiteLLM also surfaces per-call cost metadata, which supports the cost-efficiency requirement.
+### 3.2 Out-of-band customer context
 
-The trade-off is accepting a large dependency that abstracts away provider specifics; that is acceptable because writing and maintaining per-provider connectors is not worth the effort for this project.
+The resolved customer context is attached by the backend to the request-scoped tool context. It is not part of the model-facing tool schema.
 
-### 3.3 Backend service — FastAPI
+The MCP server is reachable only by the backend over the internal service network. The backend must pass the context through an internal authenticated or signed transport mechanism. The MCP server must reject calls that lack valid backend context rather than accepting a customer ID from an arbitrary caller.
 
-FastAPI is the service layer. It runs async (asyncio) end to end, satisfying `NFR2`: the event loop serves concurrent conversations without blocking, and streaming responses use Server-Sent Events. Each request carries a `session_id` that the backend passes to LangGraph as `thread_id`, so client state never crosses conversations (`NFR3`).
+The design deliberately prevents the model from selecting another customer through tool arguments. Read-only access alone is insufficient for privacy; the important boundary is that customer identity is resolved outside the model and outside customer-scoped tool parameters.
 
-### 3.4 Frontend — Chainlit
+## 4. Technology decisions
 
-Chainlit provides the chat UI, streaming rendering, and a settings panel. Runtime model selection is exposed through the settings panel and forwarded to the backend. The frontend is fully decoupled from the backend and communicates only over the HTTP API.
+### 4.1 Orchestration: LangGraph
 
-### 3.5 Data storage — Postgres + pgvector, SQLAlchemy
+LangGraph models the agent as a state machine and provides the control loop needed for repeated tool use. The graph is a ReAct-style loop: the model can answer directly or request one or more tools, receive their results, and decide whether another tool call is necessary.
 
-Postgres is the single datastore. Relational tables hold the operational data; the pgvector extension adds the vector type and HNSW index for policy embeddings; and persisted chat sessions live here as well. Consolidating onto one database avoids running a separate vector store (`NFR5`, simpler deployment). SQLAlchemy (async, with asyncpg) is the ORM used for session persistence and for the read-only operational queries exposed by the MCP server (`NFR7`, `NFR8`).
+LangGraph was selected instead of hand-rolling the loop because it provides typed state, conditional routing, tool integration, and a natural place to enforce execution limits. The trade-off is an additional framework dependency for a small prototype. The multi-step requirement in `NFR9` justifies it because a fixed intent branch would prevent combined product, customer, and policy answers.
 
-### 3.6 Tool access — MCP
+### 4.2 Model access: LiteLLM
 
-The structured-data tools are exposed through the Model Context Protocol rather than as backend-local functions. A dedicated `mcp-server` service defines the read-only tools (section 4.3) with typed schemas and serves them over Streamable HTTP; the backend hosts the MCP client and binds those tools into the LangGraph graph via the LangChain MCP adapter. This keeps tool definitions self-describing and discoverable, decouples data access from the agent, and makes the MCP server the enforcement point for read-only access (`FR4`, `NFR7`, `NFR8`). The trade-off is an extra service and one more network hop per tool call, which is acceptable at this scale for the clarity and separation it buys.
+LiteLLM is the gateway for the configured model providers. It makes the generation model and embedding provider replaceable without changing the agent workflow. The default is a local Ollama model to keep the normal path inexpensive and usable without API keys. The admin model setting exposes only an application allowlist, never arbitrary provider or model strings.
 
-### 3.7 Guardrails
+The trade-off is accepting a relatively large abstraction layer. It is justified here because model comparison is part of the study and the same application can be evaluated with local and optional hosted providers. This is not a production data-governance decision; real deployments would need provider privacy, PII, retention, consent, and contract analysis.
 
-Two layers bound the agent's behavior: an input guardrail (scope and prompt-injection detection) and an output guardrail (tone, policy compliance, safety). They implement `NFR4`, `NFR7`, and part of `NFR8`, and are detailed in section 4.
+### 4.3 API Backend: FastAPI
 
-### 3.8 Caching
+FastAPI provides the asynchronous HTTP API and Server-Sent Events used by the frontend. The backend resolves the session, loads the transcript, runs the graph, persists the turn, and emits status and response events.
 
-Two caches reduce redundant work: a TTL cache in front of tool results (product/stock/promo lookups) so repeated questions do not re-hit the database (`NFR6`), and an optional semantic answer cache for near-duplicate questions. See section 8.
+The async design addresses `NFR2`, but blocking model, embedding, PDF, or database operations must still be isolated from the event loop during implementation. The architecture does not claim that an async framework alone guarantees unlimited concurrency.
 
-### 3.9 Prompt versioning
+### 4.4 Frontend: Chainlit
 
-Prompts are plain files under `prompts/<version>/`, loaded by a small registry keyed by an explicit version. This keeps prompt changes reviewable in git without an external tool.
+Chainlit provides the reference chat UI, streaming display, and administrative settings. The customer selector is explicitly an admin/testing affordance, not a login flow. The model selector is also administrative and must be restricted to configured models.
 
-## 4. Agent workflow
+During a multi-step turn, the backend emits user-facing status events. The UI can show messages such as:
 
-This section describes the LangGraph graph in detail.
+- `thinking`: "Pensando..."
+- `consulting_data`: "Consultando os dados do atendimento..."
+- `consulting_policies`: "Consultando as politicas da loja..."
+- `preparing_response`: "Preparando a resposta..."
+- `validating_response`: "Conferindo a resposta..."
 
-### 4.1 State
+These statuses improve transparency without exposing hidden chain-of-thought or raw internal tool arguments.
 
-The graph state is a `TypedDict` holding the current message, the resolved `session_id`, the intent classification, retrieved context, tool results, the accumulated (or compressed) message history, and the final response. Only the graph mutates state; nodes are functions of that state.
+### 4.5 Data storage: Postgres, pgvector, and SQLAlchemy
 
-### 4.2 Nodes and routing
+Postgres is the single datastore. Relational tables hold the operational data, pgvector stores policy embeddings, and session tables store the complete raw transcript. SQLAlchemy with `asyncpg` provides the database layer.
 
-The graph is mostly linear, with one branch:
+Using one datastore avoids the operational cost of a separate vector database and keeps the Docker deployment small. The trade-off is that vector search and transactional application data share one service, which is appropriate for the dataset size and prototype scope.
 
-1. **Input guardrail.** The first node classifies the message as in-scope, out-of-scope, or injection. Out-of-scope and injection short-circuit to a refusal branch that returns a polite, policy-compliant response without touching the database or invoking the full generation model beyond a cheap local classifier (`NFR4`, `NFR7`).
-2. **Intent router.** For in-scope messages, a second node classifies intent — policy question, product lookup, order inquiry, promotion, or general. This determines what work is actually needed and prevents unnecessary retrieval or tool calls (`NFR5`, `NFR6`).
-3. **Resolve.** Depending on intent, the graph either retrieves policy sections through the RAG pipeline (section 6) or invokes one or more tools (section 4.3). Tool results are cached.
-4. **Assemble.** Retrieved context, tool results, the versioned system prompt, and the (possibly compressed) history are assembled into the model call.
-5. **Generate.** The model call runs through LiteLLM with the selected provider and model.
-6. **Output guardrail.** The generated answer is checked for tone, policy compliance, and safety before being returned; failures trigger a corrective pass.
-7. **Persist.** The turn is written to the session store and the response streamed back over SSE.
+### 4.6 Tool access: MCP
 
-### 4.3 Tools
+MCP separates the agent from structured-data access and provides typed, discoverable tools. The MCP server is intentionally read-only and exposes only approved queries. The backend loads the tools through the MCP adapter and binds them to the LangGraph agent.
 
-Structured-data access is handled by tools, which are defined and served by the `mcp-server` over the Model Context Protocol and consumed by the backend's MCP client. Each tool is a read-only, parameterized SQL query with a typed input schema the model can fill. The set: `get_order_by_id`, `get_orders_by_customer`, `check_stock`, `get_product`, `search_products`, `get_promotions`, `get_customer`. Because the agent can only invoke these whitelisted tools — never issue SQL directly — the MCP server is the enforcement point for read-only access (`NFR7`, `NFR8`). The model receives only the columns needed to answer a question, never raw tables.
+MCP adds a service and a network hop compared with backend-local repository functions. It is retained because tool boundaries and schemas are central to the security design, especially the requirement that customer identity never be model-selectable.
 
-## 5. Project structure
+## 5. Agent workflow
 
-```
-app/
-  agent/     # graph definition, state, nodes, guardrails
-  api/       # FastAPI routes, SSE streaming, settings
-  mcp/       # MCP client: connects to mcp-server, loads tools into the graph
-  db/        # session/chat persistence models
-  rag/       # PDF extraction, chunking, embedding, pgvector store, retriever
-  llm/       # LiteLLM wrapper, model registry, cost logging
-  cache/     # TTL tool cache and answer cache
-prompts/     # versioned prompt files
-mcp_server/  # MCP server service: read-only operational-data tools (Streamable HTTP)
-ingest/      # CLI: seed CSVs and preprocess/chunk/embed the PDF
-frontend/    # Chainlit application (separate service)
-tests/
-examples/
-docs/
-docker-compose.yml
-README.md
+### 5.1 State
+
+The graph state contains the current user message, `session_id`, request-scoped customer context reference, available evidence, tool results, response status, and final response. Customer identity itself is resolved by the backend and is not exposed as a model argument.
+
+The complete transcript is loaded from the session store. If compression is later enabled, a temporary model-context representation may be derived, but the original transcript remains authoritative and unchanged.
+
+### 5.2 ReAct loop
+
+The core graph is:
+
+```text
+START
+  -> prepare request context
+  -> agent decides: answer or call tool(s)
+  -> execute selected tools
+  -> return tool results to agent
+  -> agent decides again or produces final answer
+  -> persist complete turn
+  -> stream final response
 ```
 
-`app/agent` depends on `app/mcp`, `app/rag`, `app/llm`, and `app/cache`; `app/api` depends only on `app/agent`. `mcp_server` is a separate service with its own access to Postgres and no dependency on the backend.
+The agent can call structured tools and policy retrieval in the same turn, in any useful order. It can call multiple tools, perform multiple policy searches, or call no tool when the existing prompt and conversation context are sufficient.
 
-## 6. RAG pipeline
+There is no exclusive policy-versus-database intent branch. Removing that branch avoids a central failure mode where a mixed question is forced into only one retrieval path. A configurable maximum number of graph iterations and tool calls is still required to prevent loops, runaway latency, and uncontrolled model cost. The limit is an execution safeguard, not a restriction on the normal multi-tool behavior required by `NFR9`.
 
-The policy manual is the retrieval target. The pipeline has four stages: extraction and preprocessing, chunking, embedding and indexing, and retrieval.
+### 5.3 Workflow events
 
-**Extraction and preprocessing.** Text is extracted from the PDF and normalized. Preprocessing is where editorial decisions are applied before anything is embedded, so the model never sees content we have decided is out of scope. Concretely, the ingest job drops the duplicate WhatsApp number (keeping the one in the company contact block; this assumption is documented in the README) and removes the directives about customer-service tone, which describe how *staff* should behave and would otherwise leak into answers as policy. Running this at ingest time — once, rather than at query time — keeps the stored chunks clean.
+Status events are emitted as the graph progresses. Tool names are mapped to friendly UI states: structured operational tools produce `consulting_data`, while the policy retriever produces `consulting_policies`. The final response is emitted only after the graph finishes.
 
-**Chunking.** The manual is organized into numbered sections and sub-sections, so chunks follow those boundaries (header-aware splitting) rather than fixed token windows. Each chunk carries metadata — section number and title — used later for filtering and for citing the source in the answer.
+Response validation is an optional extension. If enabled, the UI may show `validating_response`; if validation fails, the response is hidden and replaced with a specific safe-failure message.
 
-**Embedding and indexing.** Chunks are embedded with the local embedding model by default (nomic-embed-text, 768 dimensions; bge-m3 as a multilingual alternative), with a hosted fallback through LiteLLM. Embeddings are stored in a pgvector column with an HNSW index using cosine distance, alongside the section metadata.
+## 6. Tools
 
-**Retrieval.** At query time the question is embedded with the same model, and the top-k chunks are retrieved by cosine similarity, optionally constrained to a section by metadata filter. Retrieved chunks are injected into context with their section titles so the answer can cite the policy. An optional reranking step is tracked as a stretch goal in OPEN_QUESTIONS.md.
+### 6.1 Customer-scoped tools
 
-## 7. Data layer
+Customer tools have no identity parameters:
 
-Operational data is seeded from `data/raw/*.csv` into relational tables — `categories`, `products`, `customers`, `orders`, `order_items`, `promotions` — by an idempotent ingest step that runs at backend startup. Raw files are never modified; materialization happens only in the database. The operational tables are read exclusively through the MCP server; the backend and its agent never issue SQL against them directly.
+- `get_customer()` returns the current session customer's permitted profile fields.
+- `get_customer_last_orders(n: int)` returns the current customer's most recent orders, ordered by date, with `n` capped at 10.
 
-Policy content lives in a vector table: chunk id, text, embedding, and section metadata.
+The agent cannot request another customer's record, pass a customer ID, pass an order ID, or query arbitrary customer rows. If a user names an order, the agent retrieves the current customer's recent orders and identifies the matching record from those results. The server enforces the customer binding independently of prompts and guardrails.
 
-Data-quality issues observed in the raw files are tracked separately and are intentionally not addressed in this document.
+The exact profile fields returned by `get_customer()` should follow least privilege. The model should receive only useful fields instead of the complete customer table row.
 
-## 8. Cross-cutting concerns
+### 6.2 Public operational tools
 
-- **Async and isolation.** The backend is async end to end; `session_id` maps one-to-one to the LangGraph `thread_id`, so no state is shared across clients (`NFR3`).
-- **Caching.** Tool results are memoized with a short TTL so repeated or follow-up questions do not re-query Postgres (`NFR6`). An optional semantic answer cache (embed the query, reuse a similar past answer) is a stretch goal.
-- **Session persistence and compression.** Sessions and messages are stored in Postgres (`DR1`). When history exceeds a token budget, older turns are summarized and the summary replaces the full history (`DR2`).
-- **Cost.** Local models by default, minimal context injection, a cheap local model for the guardrail and router, tool caching, and LiteLLM cost logging (`NFR5`).
-- **Grounding.** The model is instructed to answer only from retrieved context and tool results; prices, stock, and deadlines are never answered from memory (`NFR8`).
+Public catalog and promotion tools may accept product or catalog parameters because those parameters do not identify another customer.
 
-## 9. Security
+All tools use typed schemas, parameterized queries, read-only database credentials, and bounded result sizes. The model never receives raw tables or arbitrary SQL access.
 
-- The MCP server exposes only read-only, parameterized tools; the agent cannot issue SQL directly (no arbitrary SQL, no writes, no exfiltration).
-- Prompt-injection detection at the input guardrail.
-- Output guardrail enforces scope, tone, and policy.
-- Secrets are injected through environment variables only; never committed or logged.
+### 6.3 Policy retrieval tool
 
-## 10. Deployment
+The RAG retriever is exposed to the agent as a information and knowledge search capability. It returns section-aware chunks with source metadata.
 
-`docker compose up` starts the full stack: Postgres (pgvector), mcp-server, backend, frontend, and Ollama. Ingest runs idempotently at backend startup. The backend reads provider keys and the default model from environment variables.
+## 7. Policy retrieval
 
-## 11. Known limitations
+The complete policy manual is treated uniformly as a RAG source. Behavioral, tone, operational, and customer-facing sections are not given special preprocessing treatment. This avoids a manual classification process that would become impractical as the number of source documents grows.
 
-Unresolved design decisions are listed in OPEN_QUESTIONS.md; intentional limitations are documented there and in the README.
+The trade-off is that behavioral sections may occasionally be retrieved when they are not useful to the answer. The system accepts this possibility and controls it through retrieval quality rather than document-specific rules. The system prompt still defines general agent instructions, but policy behavior is not manually copied from each source document into the prompt.
+
+Preprocessing may annotate or lightly rewrite derived policy text, such as clarifying which WhatsApp number has which role. Such changes are allowed only in derived materialized data, never in `data/raw`. Each transformation must record its source document version, changed interpretation, and reason in project documentation.
+
+### 7.1 Section-aware chunking
+
+All policy content is chunked along numbered sections and subsections rather than arbitrary fixed windows. Each chunk stores the section number, title, source version, and text.
+
+### 7.2 Embedding and retrieval
+
+Chunks are embedded with one selected model and stored in pgvector using cosine similarity. The embedding model must be selected before database initialization because its dimension is part of the vector schema. The model is used consistently for indexing and querying.
+
+The retriever returns relevant sections and metadata only when they pass a configured relevance threshold. A score filter, implemented as a minimum similarity score or equivalent maximum cosine-distance threshold, prevents weak matches from being inserted into the model context. The agent may perform more than one search when a question covers multiple policies. A future reranking step may improve ordering and precision after initial retrieval, but is not required for the core implementation.
+
+## 8. Data layer and source-data assumptions
+
+Operational data is materialized from the raw CSV files into relational tables: `categories`, `products`, `customers`, `orders`, `order_items`, and `promotions`. Ingestion is idempotent and never changes the raw files.
+
+The source data may contain inconsistencies that are outside the case study's control. Examples include product names that disagree with descriptions or specifications, and order totals that do not equal the sum of order items. These records are preserved and documented rather than silently corrected. If an answer depends on an unresolved contradiction, the agent should avoid inventing a reconciliation and should communicate the limitation.
+
+The order record remains the source for its stored order status and total; order-item records remain the source for item composition. This avoids silently replacing a provided value with a calculated value.
+
+## 9. Persistence and optional extensions
+
+### 9.1 Complete transcript
+
+The full session transcript is persisted as-is. It is the authoritative conversation history and satisfies the stronger interpretation of `FR5`. Persistence is not replaced by summarization.
+
+### 9.2 Compression extension
+
+Compression is deferred until the core prototype works. If implemented, older turns may be summarized temporarily when constructing model context, while recent messages remain unchanged. The summary is not persisted; the full raw transcript remains available for every request.
+
+### 9.3 Caching extension
+
+Caching is also deferred. A future implementation may cache public product or promotion lookups with explicit freshness rules. Customer profiles, orders, tracking information, and other personal data must not enter a shared cache. Semantic answer caching is not part of the core correctness path.
+
+### 9.4 Response validation extension
+
+Response validation is welcome but not required for the first core implementation. If added, it must fail closed from the user's perspective: an invalid response is hidden and replaced with a specific message rather than streamed to completion first.
+
+## 10. Security and safety
+
+- Customer identity is resolved by the backend session binding, never by model arguments.
+- Customer-scoped tools have no customer or order ID parameters.
+- MCP is internal-only and requires valid backend context.
+- Operational tools are read-only, parameterized, and bounded.
+- The system prompt defines scope, tone, grounding, and escalation behavior.
+- Model and provider selection uses an allowlist.
+- Secrets are injected through environment variables and are never committed or logged.
+- Prompt-injection defense depth remains an open question; tool isolation does not depend on trusting the model.
+
+## 11. Deployment
+
+`docker compose` starts Postgres, the MCP server, backend, frontend, and Ollama. Database readiness, schema creation, and ingestion must be coordinated before serving requests. The ingestion operation is idempotent and should be implemented as an explicit initialization step or readiness-controlled startup task rather than relying on an uncoordinated race between services.
+
+The backend reads the configured model allowlist and provider settings from environment variables. The local default path should work without hosted-provider credentials.
+
+## 12. Open limitations
+
+- The admin customer selector simulates trusted local testing and is not authentication.
+- The raw source data may contain contradictions that are not corrected.
+- Complaint registration and human handoff are not yet represented by a tool or external queue; the decision is tracked in [OPEN_QUESTIONS.md](./OPEN_QUESTIONS.md).
+- Compression, caching, response validation, and reranking are deferred extensions.
+- The exact default generation and embedding models remain configurable decisions until selected and benchmarked.
