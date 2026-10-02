@@ -17,6 +17,7 @@
 - NFR7: Respectful, policy-compliant and safe.
 - NFR8: Accurate and grounded, minimizing hallucinations as much as possible. Information used should be limited to the provided context and prompt.
 - NFR9: The agent should support multiple tool calls and RAG searches for the same customer answer.
+- NFR10: Agent should only speak PT-BR to the user.
 
 ## Desirable (Optional/Extension)
 - DR1: Chat session compression for long-running conversation.

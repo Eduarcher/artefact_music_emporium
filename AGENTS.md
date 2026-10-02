@@ -27,7 +27,7 @@
 - Not every table should necessarily be used.
 
 Data Content:
-- Structured operational data (`data/raw/*csv`): 64 products, 50 customers, 20 orders, 25 promos, 9 categories. This needs exact lookups to recover specific data to solve user questions.
+- Structured operational data (`data/raw/*csv`): products, customers, orders, promos, categories. This needs exact lookups to recover specific data to solve user questions.
 - Unstructured policy data (`data/raw/políticas_da_loja.pdf`):  Internal policies and proceedings for customer service. This is the natural RAG/retrieval target.
 
 > NOTE: Understanding of the raw data is part of the project. There's no additional documentation of the data.

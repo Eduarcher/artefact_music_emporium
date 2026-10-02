@@ -13,13 +13,13 @@ The system is a set of five containerized services behind `docker compose`:
 - **Backend:** FastAPI owns the agent runtime, LangGraph workflow, prompt resolution, RAG retrieval, session context, and the API exposed to the frontend.
 - **MCP server:** The only operational-data access path available to the agent. It exposes read-only, typed tools and queries Postgres.
 - **Postgres:** The single datastore for operational tables, policy embeddings, sessions, and the complete raw chat transcript.
-- **Ollama (OPTIONAL):** The default local model and embedding runtime. LiteLLM can route to one of the explicitly configured alternative providers for the study case. Ollama is optional but installed by default.
+- **Ollama:** The local model and embedding runtime, required for both generation and embeddings. LiteLLM can route generation to one of the explicitly configured alternative providers for the study case.
 
 ## 3. Identity, sessions, and privacy boundary
 
-### 3.1 Local customer selection
+### 3.1 Local customer selection for testing
 
-The prototype does not implement customer login. The admin page contains a selectbox populated from the small customer dataset. Selecting a customer starts a new conversation session.
+The prototype does not implement customer login. The admin page contains a selectbox backed by a hardcoded list of fixture customers in the frontend; there is no customer-listing endpoint. Selecting a customer starts a new conversation session.
 
 The backend validates the selected customer ID once and stores a binding between a newly generated opaque `session_id` and that customer. Every subsequent chat request carries only the `session_id`; it does not carry a customer ID selected by the model or repeated by the frontend.
 
@@ -45,7 +45,7 @@ LangGraph was selected instead of hand-rolling the loop because it provides type
 
 ### 4.2 Model access: LiteLLM
 
-LiteLLM is the gateway for the configured model providers. It makes the generation model and embedding provider replaceable without changing the agent workflow. The default is a local Ollama model to keep the normal path inexpensive and usable without API keys. The admin model setting exposes only an application allowlist, never arbitrary provider or model strings.
+LiteLLM is the gateway for the configured model providers. It makes the generation model replaceable without changing the agent workflow. The default is a local Ollama model to keep the normal path inexpensive and usable without API keys; Ollama remains required for embeddings. The admin model setting exposes only an application allowlist, never arbitrary provider or model strings.
 
 The trade-off is accepting a relatively large abstraction layer. It is justified here because model comparison is part of the study and the same application can be evaluated with local and optional hosted providers. This is not a production data-governance decision; real deployments would need provider privacy, PII, retention, consent, and contract analysis.
 
@@ -88,6 +88,8 @@ MCP adds a service and a network hop compared with backend-local repository func
 The graph state contains the current user message, `session_id`, request-scoped customer context reference, available evidence, tool results, response status, and final response. Customer identity itself is resolved by the backend and is not exposed as a model argument.
 
 The complete transcript is loaded from the session store. If compression is later enabled, a temporary model-context representation may be derived, but the original transcript remains authoritative and unchanged.
+
+System and task prompts are stored as versioned files under `prompts/`, and the active prompt version id is recorded with the session so a transcript can be traced to the prompt that produced it.
 
 ### 5.2 ReAct loop
 
@@ -151,7 +153,7 @@ All policy content is chunked along numbered sections and subsections rather tha
 
 ### 7.2 Embedding and retrieval
 
-Chunks are embedded with one selected model and stored in pgvector using cosine similarity. The embedding model must be selected before database initialization because its dimension is part of the vector schema. The model is used consistently for indexing and querying.
+Chunks are embedded with one selected model and stored in pgvector using cosine similarity. The selected embedding model is BGE-M3 (1024 dimensions), chosen for being free, lightweight for this scope, and strong in Portuguese. Embeddings are produced by the local Ollama runtime, keeping the fixed 1024-dimension schema stable. The embedding model must be selected before database initialization because its dimension is part of the vector schema. The model is used consistently for indexing and querying.
 
 The retriever returns relevant sections and metadata only when they pass a configured relevance threshold. A score filter, implemented as a minimum similarity score or equivalent maximum cosine-distance threshold, prevents weak matches from being inserted into the model context. The agent may perform more than one search when a question covers multiple policies. A future reranking step may improve ordering and precision after initial retrieval, but is not required for the core implementation.
 
@@ -196,7 +198,9 @@ Response validation is welcome but not required for the first core implementatio
 
 `docker compose` starts Postgres, the MCP server, backend, frontend, and Ollama. Database readiness, schema creation, and ingestion must be coordinated before serving requests. The ingestion operation is idempotent and should be implemented as an explicit initialization step or readiness-controlled startup task rather than relying on an uncoordinated race between services.
 
-The backend reads the configured model allowlist and provider settings from environment variables. The local default path should work without hosted-provider credentials.
+The backend reads the configured model allowlist and provider settings from environment variables. The local default path should work without hosted-provider credentials. Ollama is a required service for both generation and embeddings, so `docker compose` must wait for it to be ready and for the required models to be available.
+
+A `pytest` suite covers CSV ingestion idempotency, customer-scoped tool isolation (no cross-customer leakage), and policy retrieval. Tests run against the containerized stack.
 
 ## 12. Open limitations
 

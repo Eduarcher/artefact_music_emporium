@@ -24,7 +24,8 @@ Running log of design decisions that are still open, under research, or deferred
 ## 3. Embedding model selection
 
 - **Question:** Which embedding model for the RAG pipeline (local default)?
-- **State:** Open.
+- **State:** Decided — BGE-M3.
+- **Decision:** BGE-M3 (1024 dimensions), selected because it is free, lightweight for this scope, and strong in Portuguese. Served by the local Ollama runtime, so no API key is required.
 - **Criteria:** Portuguese embedding quality, dimension/performance, Ollama availability.
 - **Impact:** Affects chunk retrieval quality and vector column dimensions.
 
