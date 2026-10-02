@@ -12,29 +12,13 @@
 ---
 
 ## Requirements
-### Functional Requirements
-- Receive client messages.
-- Process messages using available context, data, defined policies and rules
-- Return a response to the client.
-- Agent should be able to connect to the database to recover specific information when needed
-- Agent should have the full session chat history.
-
-### Non-Functional Requirements
-- Agent persona should be aligned with the identity and tone of the Music Emporium store.
-- Asynchronous operation. 
-  - Support for multiple clients without data leakage, system degradation or security issues
-- Scope-bound conversation. Gracefully handle out-of-scope questions and requests.
-- Agent should be cost-efficient.
-- Agent should avoid unnecessary calls to the database and use cache if possible.
-- Agent should be respectful, policy-compliant and safe.
-
-### Desirable (Optional/Extension)
-- Chat history persistence on database
-- Chat session compression for long-running conversation
+> Check `docs/REQUIREMENTS.md` for the full project requirements.
 
 ---
 
 ## Project Structure
+> Check `docs/ARCHITECTURE.md` for the full project architecture.
+
 ### Data
 #### Raw Data
 - Raw data is available at `data/raw`.
@@ -43,8 +27,8 @@
 - Not every table should necessarily be used.
 
 Data Content:
-- `data/raw/*csv`: Table of operational data, like products, orders, clients, categories and promotions.
-- `data/raw/políticas_da_loja.pdf`: Internal politics and proceedings for customer service.
+- Structured operational data (`data/raw/*csv`): 64 products, 50 customers, 20 orders, 25 promos, 9 categories. This needs exact lookups to recover specific data to solve user questions.
+- Unstructured policy data (`data/raw/políticas_da_loja.pdf`):  Internal policies and proceedings for customer service. This is the natural RAG/retrieval target.
 
 > NOTE: Understanding of the raw data is part of the project. There's no additional documentation of the data.
 
