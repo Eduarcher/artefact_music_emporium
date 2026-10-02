@@ -34,6 +34,7 @@ Data Content:
 
 ### Tech Stack
 - Python
+  - dependencies should be managed with `uv` and declared in `pyproject.toml`
   - The main language of the project.
 - Docker
   - The whole project should be easily runnable and testable on any machine

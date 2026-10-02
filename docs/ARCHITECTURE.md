@@ -198,6 +198,8 @@ Response validation is welcome but not required for the first core implementatio
 
 `docker compose` starts Postgres, the MCP server, backend, frontend, and Ollama. Database readiness, schema creation, and ingestion must be coordinated before serving requests. The ingestion operation is idempotent and should be implemented as an explicit initialization step or readiness-controlled startup task rather than relying on an uncoordinated race between services.
 
+Python dependencies should be declared in `pyproject.toml` and managed with `uv`.
+
 The backend reads the configured model allowlist and provider settings from environment variables. The local default path should work without hosted-provider credentials. Ollama is a required service for both generation and embeddings, so `docker compose` must wait for it to be ready and for the required models to be available.
 
 A `pytest` suite covers CSV ingestion idempotency, customer-scoped tool isolation (no cross-customer leakage), and policy retrieval. Tests run against the containerized stack.
