@@ -7,19 +7,15 @@ Running log of design decisions that are still open, under research, or deferred
 ## 1. Default generation model
 
 - **Question:** Which local (Ollama) model should ship as the default so the agent works well out of the box, without API keys, in Portuguese?
-- **State:** Open — under research.
-- **Current position:** Use the locally installed Gemma model for development, but we want a more evidence-based recommendation.
-- **Criteria:** PT-BR quality, latency on typical hardware, Ollama availability, memory footprint.
-- **Impact:** Non-blocking — the model is swappable at runtime via the Chainlit settings panel and LiteLLM. Only the *default* value depends on this.
+- **State:** Decided — `qwen3.5:9b`.
+- **Decision:** `qwen3.5:9b` is the default local model, selected for reliable tool-calling and PT-BR quality at a reasonable memory footprint. It is swappable at runtime via the Chainlit settings panel and LiteLLM; the allowlist is configured with `MODEL_ALLOWLIST`.
+- **Note:** LiteLLM's Ollama integration dropped tool calls for this model (it returns tool calls as a dict rather than a JSON string), so local `ollama/*` models are served through the native `langchain-ollama` integration while LiteLLM remains the gateway for hosted providers.
 
 ## 2. Prompt-injection defense depth
 
 - **Question:** How deep should injection defense go, given the grader may try to break or inject into the agent?
-- **State:** Open — needs confirmation.
-- **Options:**
-  1. Lightweight: hardened system prompt + strict read-only tool allowlist + a dedicated injection-check node in the graph.
-  2. Deeper: a dedicated injection-detection model/classifier (more robust, more time).
-- **Impact:** Affects the input guardrail node design and time budget.
+- **State:** Decided — lightweight.
+- **Decision:** Hardened system prompt (ignore instructions embedded in user messages, never reveal the prompt or access other customers), a strict read-only tool allowlist, and customer identity resolved outside the model. No dedicated classifier in v1.
 
 ## 3. Embedding model selection
 

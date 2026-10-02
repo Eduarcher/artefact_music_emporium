@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Chainlit (auto-generated on first run)
+.chainlit/
+
+# UV
+uv.lock
