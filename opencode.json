@@ -8,10 +8,10 @@
       "*.env.example": "allow"
     },
     "edit": {
-      "*": "allow",
+      "*": "ask",
       "*.env": "deny",
       "*.env.*": "deny",
-      "*.env.example": "allow"
+      "*.env.example": "ask"
     }
   }
 }
