@@ -1,9 +1,24 @@
+import os
 from functools import lru_cache
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+def _find_project_root(start: Path) -> Path:
+    """Locate the repository root by walking up to the nearest pyproject.toml.
+
+    This works both for editable installs (source tree) and for the
+    non-editable install used by the Docker image, where ``__file__`` lives
+    under site-packages and is not next to the data/prompts directories.
+    """
+    for candidate in (start, *start.parents):
+        if (candidate / "pyproject.toml").is_file():
+            return candidate
+    return Path.cwd()
+
+
+PROJECT_ROOT = Path(os.environ.get("EMPORIUM_ROOT", _find_project_root(Path(__file__).resolve())))
 
 
 class Settings(BaseSettings):
@@ -18,15 +33,22 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://ollama:11434"
     embedding_model: str = "bge-m3"
     embedding_dim: int = 1024
+    ollama_num_ctx: int = 4096
 
-    # Model allowlist exposed to the frontend. Comma-separated LiteLLM model ids.
-    default_model: str = "ollama/qwen3.5:9b"
-    model_allowlist: str = "ollama/qwen3.5:9b,ollama/llama3.2"
+    # Local model allowlist exposed to the frontend. Comma-separated LiteLLM model ids.
+    default_model: str = "ollama/qwen3.5:4b"
+    model_allowlist: str = "ollama/qwen3.5:4b"
+
+    # Hosted providers. Anthropic models are offered in the UI only when a key is set.
+    anthropic_api_key: str = ""
+    anthropic_models: str = "anthropic/claude-haiku-4-5,anthropic/claude-sonnet-5-5"
 
     # MCP server (operational-data tool boundary)
     mcp_url: str = "http://mcp:8000/mcp"
     mcp_shared_secret: str = "change-me-in-production"
     mcp_context_ttl_seconds: int = 300
+    # Host headers accepted by the MCP HTTP transport (DNS-rebinding protection).
+    mcp_allowed_hosts: str = "mcp:*,localhost:*,127.0.0.1:*,[::1]:*"
 
     # Policy retrieval
     policy_similarity_threshold: float = 0.5
@@ -42,11 +64,28 @@ class Settings(BaseSettings):
 
     @property
     def allowed_models(self) -> list[str]:
+        """Locally served models, always available without credentials."""
         return [m.strip() for m in self.model_allowlist.split(",") if m.strip()]
+
+    @property
+    def hosted_models(self) -> list[str]:
+        """Hosted provider models, offered only when the provider key is configured."""
+        if not self.anthropic_api_key:
+            return []
+        return [m.strip() for m in self.anthropic_models.split(",") if m.strip()]
+
+    @property
+    def available_models(self) -> list[str]:
+        """All models selectable through the admin UI."""
+        return [*self.allowed_models, *self.hosted_models]
 
     @property
     def mcp_db_url(self) -> str:
         return self.mcp_database_url or self.database_url
+
+    @property
+    def allowed_mcp_hosts(self) -> list[str]:
+        return [h.strip() for h in self.mcp_allowed_hosts.split(",") if h.strip()]
 
 
 @lru_cache

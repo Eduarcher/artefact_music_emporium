@@ -8,7 +8,7 @@ RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
 
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
-    "postgresql+asyncpg://emporium:emporium@localhost:5432/emporium_test",
+    "postgresql+asyncpg://emporium:emporium@localhost:5433/emporium_test",
 )
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 

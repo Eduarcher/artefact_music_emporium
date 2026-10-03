@@ -1,6 +1,7 @@
 import json
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from starlette.requests import Request
@@ -23,7 +24,13 @@ _session_factory: async_sessionmaker[AsyncSession] | None = None
 _LAST_ORDERS_CAP = 10
 _SEARCH_RESULTS_CAP = 10
 
-mcp = FastMCP(name="emporio-operational-data")
+mcp = FastMCP(
+    name="emporio-operational-data",
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=get_settings().allowed_mcp_hosts,
+    ),
+)
 
 
 @mcp.custom_route("/health", methods=["GET"])
@@ -201,28 +208,83 @@ async def get_product(product_id: int) -> dict:
     }
 
 
+def _promotion_row(promo, product, category_name: str | None) -> dict:
+    final_price = product.price_brl
+    if promo.discount_percent:
+        final_price = round(product.price_brl * (1 - promo.discount_percent / 100), 2)
+    return {
+        "product_id": product.product_id,
+        "product_name": product.name,
+        "category": category_name,
+        "discount_percent": promo.discount_percent,
+        "original_price_brl": product.price_brl,
+        "final_price_brl": final_price,
+        "description": promo.description,
+    }
+
+
 @mcp.tool()
-async def get_active_promotions() -> dict:
-    """List all currently active promotions across the catalog."""
+async def search_promotions(keyword: str, limit: int = 5) -> dict:
+    """Search active promotions by product name, product description or category.
+
+    Use this for targeted promotion questions, e.g. "promoções de violão" or
+    "tem promoção de teclado?". It never returns promotions outside the matching
+    products/categories.
+    """
+    bounded = max(1, min(int(limit or 5), _SEARCH_RESULTS_CAP))
+    pattern = f"%{keyword}%"
+
     async with _get_session_factory()() as session:
         rows = (
             await session.execute(
-                select(models.Promotion, models.Product)
+                select(models.Promotion, models.Product, models.Category.name)
                 .join(models.Product, models.Product.product_id == models.Promotion.product_id)
-                .where(models.Promotion.is_active.is_(True))
-                .order_by(models.Promotion.product_id)
+                .outerjoin(
+                    models.Category,
+                    models.Category.category_id == models.Product.category_id,
+                )
+                .where(
+                    models.Promotion.is_active.is_(True),
+                    (models.Product.name.ilike(pattern))
+                    | (models.Product.description.ilike(pattern))
+                    | (models.Category.name.ilike(pattern)),
+                )
+                .order_by(models.Product.name)
+                .limit(bounded)
             )
         ).all()
 
     return {
         "promotions": [
-            {
-                "product_id": product.product_id,
-                "product_name": product.name,
-                "discount_percent": promo.discount_percent,
-                "description": promo.description,
-            }
-            for promo, product in rows
+            _promotion_row(promo, product, category) for promo, product, category in rows
+        ]
+    }
+
+
+@mcp.tool()
+async def get_active_promotions() -> dict:
+    """List all currently active promotions across the catalog.
+
+    Use this only for a general "quais são as promoções?" question. For a
+    specific product or category use search_promotions instead.
+    """
+    async with _get_session_factory()() as session:
+        rows = (
+            await session.execute(
+                select(models.Promotion, models.Product, models.Category.name)
+                .join(models.Product, models.Product.product_id == models.Promotion.product_id)
+                .outerjoin(
+                    models.Category,
+                    models.Category.category_id == models.Product.category_id,
+                )
+                .where(models.Promotion.is_active.is_(True))
+                .order_by(models.Product.name)
+            )
+        ).all()
+
+    return {
+        "promotions": [
+            _promotion_row(promo, product, category) for promo, product, category in rows
         ]
     }
 

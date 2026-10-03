@@ -10,7 +10,7 @@ _OLLAMA_PREFIX = "ollama/"
 def build_model(model_id: str | None = None) -> BaseChatModel:
     settings = get_settings()
     model = model_id or settings.default_model
-    if model not in settings.allowed_models:
+    if model not in settings.available_models:
         raise ValueError(f"Model '{model}' is not in the configured allowlist")
 
     if model.startswith(_OLLAMA_PREFIX):
@@ -18,7 +18,12 @@ def build_model(model_id: str | None = None) -> BaseChatModel:
             model=model.removeprefix(_OLLAMA_PREFIX),
             base_url=settings.ollama_base_url,
             temperature=0,
-            num_ctx=8192,
+            num_ctx=settings.ollama_num_ctx,
+        )
+
+    if model.startswith("anthropic/") and settings.anthropic_api_key:
+        return ChatLiteLLM(
+            model=model, temperature=0, max_retries=2, api_key=settings.anthropic_api_key
         )
 
     return ChatLiteLLM(model=model, temperature=0, max_retries=2)

@@ -1,78 +1,65 @@
 # Artefact Music Emporium - Case Study
 
-Customer-service agent prototype for the fictional "Empório da Música
-Instrumentos Musicais Ltda." — a musical instrument store.
+Customer-service agent prototype for the fictional "Empório da Música Instrumentos Musicais Ltda." — a musical instrument store.
 
 ## Documentation
 
 - [Requirements](./docs/REQUIREMENTS.md) - functional and non-functional requirements.
-- [Architecture](./docs/ARCHITECTURE.md) — central architecture reference
-  (design, decisions, trade-offs).
+- [Architecture](./docs/ARCHITECTURE.md) — central architecture reference (design, decisions, trade-offs).
 - [Open Questions](./docs/OPEN_QUESTIONS.md) — unresolved design decisions.
-- [Examples](./examples/) — sample conversations (policy, orders, catalog,
-  returns, out-of-scope).
+- [Examples](./examples/) — sample conversations (policy, orders, catalog, returns, out-of-scope).
 
 ## Overview
 
-The agent answers recurring customer-service questions for a musical-instrument
-store: business hours, order status, product price and availability, promotions,
-payments, shipping, returns, warranty, and privacy. It combines two data sources
-per turn:
+The agent answers recurring customer-service questions for a musical-instrument store: business hours, order status, product price and availability, promotions, payments, shipping, returns, warranty, and privacy. It combines two data sources per turn:
 
-- **Structured operational data** (`products`, `customers`, `orders`,
-  `order_items`, `promotions`, `categories`) exposed to the agent as read-only,
-  typed tools through a dedicated **MCP server**.
-- **Unstructured policy data** (`políticas_da_loja.pdf`) chunked by section,
-  embedded with **BGE-M3**, and retrieved from **pgvector** via cosine
-  similarity.
+- **Structured operational data** (`products`, `customers`, `orders`, `order_items`, `promotions`, `categories`) exposed to the agent as read-only, typed tools through a dedicated **MCP server**.
+- **Unstructured policy data** (`políticas_da_loja.pdf`) chunked by section, embedded with **BGE-M3**, and retrieved from **pgvector** via cosine similarity.
 
-The agent is a **LangGraph ReAct loop**: it decides whether to answer directly,
-retrieve a policy, call one tool, or call several tools in the same turn. A
-**LiteLLM** gateway selects the generation model (default `ollama/qwen3.5:9b`);
-**Ollama** is always the local runtime for generation and embeddings.
+The agent is a **LangGraph ReAct loop**: it decides whether to answer directly, retrieve a policy, call one tool, or call several tools in the same turn. A **LiteLLM** gateway selects the generation model: the default is the local `ollama/qwen3.5:4b`, and hosted **Anthropic** models (Haiku/Sonnet) can be enabled by setting an API key. **Ollama** is always the local runtime for generation and embeddings.
 
-Five containerized services run behind `docker compose`: `db` (Postgres +
-pgvector), `ollama`, `ingest` (one-shot data materialization), `mcp`
-(operational-data tools), `backend` (FastAPI agent runtime), and `frontend`
-(Chainlit chat UI). See [ARCHITECTURE.md](./docs/ARCHITECTURE.md) for details.
+The stack runs behind `docker compose`: `db` (Postgres + pgvector), `ollama`, `ollama-pull` and `ollama-warmup` (one-shot model download and preload), `ingest` (one-shot data materialization), `mcp` (operational-data tools), `backend` (FastAPI agent runtime), and `frontend` (Chainlit chat UI). See [ARCHITECTURE.md](./docs/ARCHITECTURE.md) for details.
 
 ## Requirements
 
-- Docker and Docker Compose (for the all-in-one stack), or
-- `uv` and a local Ollama (for local development).
+- Docker and Docker Compose (v2, invoked as `docker compose`). This is the only supported way to run the full stack. Everything, including Ollama, runs in containers.
+
+For local development of the Python code you additionally need `uv`; see [Local development](#local-development).
 
 ## Quick start (Docker)
 
-1. Pull the models and build/start the stack:
+1. Build and start the whole stack:
 
    ```bash
    docker compose up --build
    ```
 
-   On first run the `ollama-pull` service downloads `bge-m3` and
-   `qwen3.5:9b`, and `ingest` materializes the CSVs and embeds the policy PDF.
-   This can take several minutes depending on network and hardware.
+   On the first run the `ollama-pull` service downloads `bge-m3` and `qwen3.5:4b`, `ollama-warmup` preloads them into memory (so the first message is not slowed by a cold start), and `ingest` materializes the CSVs and embeds the policy PDF. This can take several minutes depending on network and hardware. Subsequent runs reuse the `ollama_data` and `db_data` volumes.
 
 2. Open the chat UI at <http://localhost:8001>.
 
-3. Use the gear icon to pick a **Cliente (simulação)** and a **Modelo**, then
-   chat. Selecting a new customer or model starts a new conversation session.
+3. The UI signs in automatically as a local admin (identifier `admin`; override with `CHAINLIT_ADMIN_USER`). No password is required. The login is what lets Chainlit persist and resume conversations.
 
-The backend API is exposed at <http://localhost:8000> (`/docs` for OpenAPI).
+4. In the left sidebar, choose a **Cliente (simulação)** and a **Modelo**, then chat. Selecting a new customer or model starts a new conversation session. Previous conversations appear in the sidebar and can be resumed; reloading the page keeps the current session.
 
-> Tip: to reuse an Ollama already running on the host instead of the container,
-> set `OLLAMA_BASE_URL=http://host.docker.internal:11434` in a `.env` file and
-> start only the other services (`docker compose up db ingest mcp backend frontend`).
+The backend API is exposed at <http://localhost:8000> (`/docs` for OpenAPI). The MCP server is internal-only on the compose network.
+
+> Use `docker compose` (the v2 plugin), not the legacy `docker-compose` v1 binary, which does not support the Compose specification used here.
+
+> Tip: to reuse an Ollama already running on the host instead of the container, set `OLLAMA_BASE_URL=http://host.docker.internal:11434` in a `.env` file and start only the other services (`docker compose up db ingest mcp backend frontend`). You are then responsible for pulling `bge-m3` and `qwen3.5:4b` on the host.
 
 ## Local development
+
+This runs the Python services from the repository against a containerized Postgres and a host or containerized Ollama. `uv` manages the virtual environment and dependencies; do not install packages into the system Python.
 
 ```bash
 # 1. Install dependencies (creates a project venv)
 uv sync
 
-# 2. Start Postgres + Ollama (host), then materialize the data
+# 2. Start Postgres, then pull the models on your Ollama and materialize the data
 docker compose up -d db
-ollama pull bge-m3 qwen3.5:9b
+ollama pull bge-m3
+ollama pull qwen3.5:4b
 DATABASE_URL=postgresql+asyncpg://emporium:emporium@localhost:5433/emporium \
 OLLAMA_BASE_URL=http://localhost:11434 \
   uv run python -m emporium.ingest
@@ -85,14 +72,17 @@ MCP_URL=http://localhost:8002/mcp \
 OLLAMA_BASE_URL=http://localhost:11434 \
   uv run uvicorn emporium.api.app:app --reload --port 8000
 
-# 4. Run the frontend
-BACKEND_URL=http://localhost:8000 uv run chainlit run services/frontend/app.py
+# 4. Run the frontend on port 8001 (the backend already uses 8000)
+BACKEND_URL=http://localhost:8000 \
+CHAINLIT_DB_URL=postgresql+asyncpg://emporium:emporium@localhost:5433/emporium \
+  uv run chainlit run services/frontend/app.py --port 8001
 ```
+
+The frontend listens on `8001` to avoid clashing with the backend on `8000`. Set `SHOW_AGENT_STEPS=true` to display the internal retrieval/tool status steps (a developer aid, hidden by default).
 
 ## Configuration
 
-Configuration is read from environment variables (or a `.env` file). See
-[`.env.example`](./.env.example) for the full list. The most important:
+Configuration is read from environment variables (or a `.env` file). See [`.env.example`](./.env.example) for the full list. The most important:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -102,13 +92,18 @@ Configuration is read from environment variables (or a `.env` file). See
 | `MCP_SHARED_SECRET` | `change-me-in-production` | HMAC secret for customer context |
 | `OLLAMA_BASE_URL` | `http://ollama:11434` | Ollama runtime |
 | `EMBEDDING_MODEL` | `bge-m3` | Embedding model (1024-dim) |
-| `DEFAULT_MODEL` | `ollama/qwen3.5:9b` | Default generation model |
-| `MODEL_ALLOWLIST` | `ollama/qwen3.5:9b,ollama/llama3.2` | Models selectable in the UI |
+| `OLLAMA_NUM_CTX` | `4096` | Context window for the local generation model |
+| `DEFAULT_MODEL` | `ollama/qwen3.5:4b` | Default generation model |
+| `MODEL_ALLOWLIST` | `ollama/qwen3.5:4b` | Local models selectable in the UI |
+| `ANTHROPIC_API_KEY` | (empty) | Enables the Anthropic models below when set |
+| `ANTHROPIC_MODELS` | `anthropic/claude-haiku-4-5,anthropic/claude-sonnet-5-5` | Hosted models shown once a key is set |
 | `POLICY_SIMILARITY_THRESHOLD` | `0.5` | Minimum cosine similarity for retrieval |
+| `SHOW_AGENT_STEPS` | `false` | Show internal agent status steps in the UI |
+| `CHAINLIT_DB_URL` | (empty) | Enables thread persistence/resume when set (async SQLAlchemy URL) |
+| `CHAINLIT_ADMIN_USER` | `admin` | Identifier used for the automatic local admin sign-in |
+| `CHAINLIT_AUTH_SECRET` | `change-me-in-production` | Secret used to sign UI session cookies |
 
-Hosted providers can be added to the allowlist (e.g. `openai/gpt-4o-mini` or
-`anthropic/claude-...`); LiteLLM routes those through the corresponding provider
-API key.
+Hosted providers are optional. Setting `ANTHROPIC_API_KEY` adds the configured `ANTHROPIC_MODELS` to the model selector; without a key only local Ollama models are offered. LiteLLM routes `anthropic/*` models through the key.
 
 ## Running tests
 
@@ -117,34 +112,26 @@ API key.
 docker compose run --rm --profile test test
 ```
 
-The suite covers CSV ingestion idempotency, customer-scoped tool isolation
-(no cross-customer leakage), and policy retrieval.
+The suite covers CSV ingestion idempotency, referential integrity, customer-scoped tool isolation (no cross-customer leakage), promotion filtering, and policy retrieval.
 
 ## Known limitations
 
-- The customer selector is an **admin simulation**, not authentication.
-- Complaint registration and human handoff are not wired to a ticketing system;
-  the agent acknowledges complaints and points to human follow-up.
-- Raw CSV data may contain contradictions (e.g. order totals vs. item sums);
-  they are preserved, never silently reconciled.
-- Prompt-injection defense is lightweight (hardened prompt + read-only tool
-  allowlist + scope guardrails), not a dedicated classifier.
-- The MCP server enforces read-only access in code and via a read-only DB role;
-  it is reachable only on the internal compose network.
-- Caching, compression, response validation, and retrieval reranking are
-  deferred extensions.
+- The customer selector is an **admin simulation**, not authentication of the end customer. The UI signs in automatically as a local admin (no password) purely so conversations can be persisted and resumed.
+- Complaint registration and human handoff are not wired to a ticketing system; the agent acknowledges complaints and points to human follow-up.
+- Raw CSV data may contain contradictions (e.g. order totals vs. item sums); they are preserved, never silently reconciled.
+- Prompt-injection defense is lightweight (hardened prompt + read-only tool allowlist + scope guardrails), not a dedicated classifier.
+- The MCP server enforces read-only access in code and via a read-only DB role; it is reachable only on the internal compose network.
+- Thread persistence uses Chainlit's own tables in the same Postgres database; deleting the `db_data` volume resets both operational data and saved conversations.
+- The container uses Python 3.12. Python 3.14 is not usable with Chainlit 2.12: Chainlit calls `nest_asyncio.apply()` and `nest-asyncio` 1.6.0 (unmaintained) breaks `asyncio.current_task()` on 3.14, which makes `anyio.to_thread` fail and prevents the UI's static assets from loading (blank page).
+- Caching, compression, response validation, and retrieval reranking are deferred extensions.
 
 ## Assumptions
 
-- Customer identity: The admin selector can choose one of the customers profiles to use on a testing session. This enables for testing how personal customer data is not shared between sessions of different customers, since tools are integrated exclusively using the customer id of the session. A production deployment would require authentication and authorization instead of this trusted admin simulation.
+- Customer identity: The admin selector can choose one of the customer profiles to use on a testing session. This enables testing that personal customer data is not shared between sessions of different customers, since tools are integrated exclusively using the customer id of the session. A production deployment would require authentication and authorization instead of this trusted admin simulation.
 - WhatsApp Numbers: The policy manual lists two different numbers. The number in the company contact block, `(67) 3341-4444`, is treated as the operational company contact. The number in the customer-service section, `(67) 3321-4500`, is treated as the customer-service WhatsApp contact.
-
-- CSV Inconsistencies: CSVs content are preserved without correction, even if the source may contain product name/description or specification conflicts and order totals that differ from the sum of order items. These issues are noted but considered out-of-scope for this project, and the agent must not silently invent a reconciliation.
-
+- CSV Inconsistencies: CSV content is preserved without correction, even if the source may contain product name/description or specification conflicts and order totals that differ from the sum of order items. These issues are noted but considered out-of-scope for this project, and the agent must not silently invent a reconciliation.
 - Signed MCP context: The backend binds the session customer to every MCP call through an HMAC-signed bearer token (`Authorization`) verified by the MCP server. This is the "signed transport mechanism" of the architecture. The MCP server rejects requests without a valid token.
-
 - Fixture customers: The frontend shows a hardcoded list of fixture customers (there is no customer-listing endpoint). The backend validates the selected `customer_id` against the `customers` table before creating a session.
-
 
 ## Decision rationale
 
@@ -152,11 +139,11 @@ The suite covers CSV ingestion idempotency, customer-scoped tool isolation
 - Server-bound customer context: Removing customer IDs from tool schemas is stronger than relying on prompts or guardrails. The backend resolves the customer once and the tools use only that trusted context. The local admin selector is for testing by assuming customer identities.
 - Policy retrieval: The complete policy manual is ingested uniformly as a RAG source, with no special preprocessing. Persona, tone, scope, lookup rules, escalation, and other behavioral directives are written manually into the versioned system prompt, not extracted from the PDF. The retriever is designed to rank factual sections (hours, payments, returns, delivery, promotions, guarantees, privacy) above behavioral ones. A preprocessing split will only be reconsidered if testing shows behavioral sections are being surfaced.
 - Customer tools: Customer-scoped tools use the session-bound customer internally. `get_customer()` has no parameters, and `get_customer_last_orders(n)` is capped at 10 orders. The agent cannot request another customer's record or provide an order ID to bypass the customer boundary.
-- Model providers: The project is hybrid. Ollama is the required local runtime for generation and embeddings, while third-party generation providers are supported through LiteLLM. This is acceptable for the study case, but a production system would need provider privacy, PII, retention, consent, and contractual controls.
+- Model providers: The project is hybrid. The default is a small local Ollama model (`qwen3.5:4b`) so the stack works out of the box on CPU without credentials. Hosted Anthropic models are exposed through LiteLLM only when an API key is configured. A production system would need provider privacy, PII, retention, consent, and contractual controls.
 
 ## Future
-- Caching and semantic caching
-- Chat compression
-  - The complete raw transcript is always persisted, any future compressed context is temporary and is never persisted.
-- Response validation
-- Retrieval reranking
+
+- Caching and semantic caching.
+- Chat compression. The complete raw transcript is always persisted; any future compressed context is temporary and is never persisted.
+- Response validation.
+- Retrieval reranking.

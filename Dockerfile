@@ -1,4 +1,4 @@
-FROM python:3.14-slim
+FROM python:3.12-slim
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
@@ -14,6 +14,8 @@ COPY src ./src
 COPY prompts ./prompts
 COPY services ./services
 COPY data ./data
+COPY .chainlit ./.chainlit
+COPY chainlit.md ./chainlit.md
 
 RUN uv sync --frozen --no-editable
 

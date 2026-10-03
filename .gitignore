@@ -217,8 +217,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Chainlit (auto-generated on first run)
-.chainlit/
-
-# UV
-uv.lock
+# Chainlit auto-generated files (.chainlit/config.toml is intentionally tracked)
+.chainlit/translations/
+.chainlit/.files/

@@ -29,6 +29,16 @@ from emporium.tools.policy_tool import build_policy_tool
 
 logger = logging.getLogger("emporium.api")
 
+_MODEL_LABELS = {
+    "ollama/qwen3.5:4b": "Qwen3.5 4B (local)",
+    "anthropic/claude-haiku-4-5": "Claude Haiku 4.5",
+    "anthropic/claude-sonnet-5-5": "Claude Sonnet 5.5",
+}
+
+
+def _model_label(model_id: str) -> str:
+    return _MODEL_LABELS.get(model_id, model_id)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -60,7 +70,7 @@ async def health() -> dict[str, str]:
 @app.get("/api/config", response_model=ConfigResponse)
 async def config() -> ConfigResponse:
     settings = get_settings()
-    models = [ModelInfo(id=m, label=m) for m in settings.allowed_models]
+    models = [ModelInfo(id=m, label=_model_label(m)) for m in settings.available_models]
     return ConfigResponse(models=models, default_model=settings.default_model)
 
 
@@ -73,7 +83,7 @@ async def create_session(body: CreateSessionRequest) -> CreateSessionResponse:
         raise HTTPException(status_code=404, detail="customer not found")
 
     model = body.model or settings.default_model
-    if model not in settings.allowed_models:
+    if model not in settings.available_models:
         raise HTTPException(status_code=400, detail="model not allowed")
 
     session_row = await session_service.create_session(
