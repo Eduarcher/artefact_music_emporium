@@ -44,7 +44,7 @@ For local development of the Python code you additionally need `uv`; see [Local 
 
    **Raciocínio** controls the local model's thinking phase per request and is off by default (`Desligado (rápido)`). Enabling it (`Ligado (reflexivo)`) improves tool selection and grounding but is slower on CPU; it does not restart or reload the Ollama model.
 
-   **Modo debug** is off by default. When enabled, the UI shows the agent's status (`Pensando...`, `Consultando os dados...`, `Preparando a resposta...`) and each tool call with its arguments and returned result, as collapsible steps.
+   **Modo debug** is off by default. When enabled, the UI shows the agent's status (`Pensando...`, `Consultando os dados...`) while it works, then each tool call with its arguments and returned result as collapsible steps; the transient status step disappears as soon as the answer starts streaming.
 
 The backend API is exposed at <http://localhost:8000> (`/docs` for OpenAPI). The MCP server is internal-only on the compose network.
 

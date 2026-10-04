@@ -51,13 +51,17 @@ async def test_search_products_applies_active_promotion(engine, session_factory)
     await _prepare(engine, session_factory)
 
     result = await mcp_server.search_products("Crafter HT-100")
-    product = next(p for p in result["products"] if p["product_id"] == 90)
+    product = next(
+        p for p in result["products"] if p["name"] == "Crafter HT-100 Folk Aço Natural"
+    )
 
-    assert product["price_brl"] == 2399.0
+    assert product["original_price_brl"] == 2399.0
     assert product["final_price_brl"] == 1967.18
     assert product["on_promotion"] is True
     assert product["in_stock"] is True
     assert "stock_quantity" not in product
+    assert "product_id" not in product
+    assert "status" not in product
 
 
 async def test_search_products_without_promotion_keeps_full_price(
@@ -66,11 +70,20 @@ async def test_search_products_without_promotion_keeps_full_price(
     await _prepare(engine, session_factory)
 
     result = await mcp_server.search_products("Yamaha C40")
-    product = next(p for p in result["products"] if p["product_id"] == 81)
+    product = next(p for p in result["products"] if p["name"] == "Yamaha C40 Nylon Natural")
 
-    assert product["price_brl"] == 599.9
+    assert product["original_price_brl"] == 599.9
     assert product["final_price_brl"] == 599.9
     assert product["on_promotion"] is False
+
+
+async def test_search_products_never_returns_inactive(engine, session_factory) -> None:
+    """Discontinued products are excluded even when the keyword matches."""
+    await _prepare(engine, session_factory)
+
+    result = await mcp_server.search_products("Shelby SN-7C")
+
+    assert result["products"] == []
 
 
 async def test_get_product_applies_active_promotion(engine, session_factory) -> None:
@@ -78,9 +91,55 @@ async def test_get_product_applies_active_promotion(engine, session_factory) -> 
 
     product = await mcp_server.get_product(94)
 
-    assert product["price_brl"] == 5999.0
+    assert product["original_price_brl"] == 5999.0
     assert product["final_price_brl"] == 5519.08
     assert product["on_promotion"] is True
     assert product["in_stock"] is True
     assert "stock_quantity" not in product
+    assert "product_id" not in product
+    assert "status" not in product
     assert product["promotions"][0]["final_price_brl"] == 5519.08
+
+
+async def test_get_product_rejects_inactive(engine, session_factory) -> None:
+    """An inactive (discontinued) product is treated as not found."""
+    await _prepare(engine, session_factory)
+
+    assert await mcp_server.get_product(113) == {"error": "product not found"}
+
+
+async def test_get_categories_returns_all(engine, session_factory) -> None:
+    await _prepare(engine, session_factory)
+
+    result = await mcp_server.get_categories()
+
+    names = {c["name"] for c in result["categories"]}
+    assert names == {
+        "Guitarras",
+        "Baixos",
+        "Baterias e Percussão",
+        "Teclados e Pianos",
+        "Violões",
+        "Instrumentos de Sopro (Madeiras)",
+        "Instrumentos de Sopro (Metais)",
+        "Cordas Orquestrais",
+        "Ukuleles",
+    }
+    assert all("category_id" in c and "description" in c for c in result["categories"])
+
+
+async def test_get_products_by_category_returns_active_only(
+    engine, session_factory
+) -> None:
+    await _prepare(engine, session_factory)
+
+    result = await mcp_server.get_products_by_category(5, limit=10)
+
+    names = {p["name"] for p in result["products"]}
+    assert "Shelby SN-7C 7 Cordas Nylon Natural" not in names
+    assert all(
+        {"name", "original_price_brl", "final_price_brl", "on_promotion", "in_stock"}
+        <= set(p)
+        for p in result["products"]
+    )
+    assert all("product_id" not in p and "status" not in p for p in result["products"])

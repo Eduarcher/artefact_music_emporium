@@ -126,12 +126,14 @@ async def get_customer_last_orders(n: int = 3) -> dict:
 
 @mcp.tool()
 async def search_products(keyword: str, limit: int = 5) -> dict:
-    """Search the catalog by name or description keyword.
+    """Search active catalog products by name or description keyword.
 
-    Each result includes ``final_price_brl``, the price after the best active
-    promotion (same as ``price_brl`` when the product is not on promotion), so
-    quote the final price directly. ``in_stock`` tells whether the item is
-    available; raw stock counts are intentionally not exposed.
+    Each result includes ``original_price_brl`` (the list price) and
+    ``final_price_brl`` (the price after the best active promotion, same as
+    ``original_price_brl`` when the product is not on promotion); quote the
+    final price directly. ``in_stock`` tells whether the item is available;
+    raw stock counts are intentionally not exposed. Inactive products are never
+    returned.
     """
     bounded = max(1, min(int(limit or 5), _SEARCH_RESULTS_CAP))
     pattern = f"%{keyword}%"
@@ -163,15 +165,18 @@ async def search_products(keyword: str, limit: int = 5) -> dict:
 
 @mcp.tool()
 async def get_product(product_id: int) -> dict:
-    """Return full details of a single product, including active promotions.
+    """Return full details of a single active product, including its promotions.
 
     ``in_stock`` tells whether the item is available; raw stock counts are
-    intentionally not exposed.
+    intentionally not exposed. Inactive products are treated as not found.
     """
     async with _get_session_factory()() as session:
         product = (
             await session.execute(
-                select(models.Product).where(models.Product.product_id == product_id)
+                select(models.Product).where(
+                    models.Product.product_id == product_id,
+                    models.Product.status == "active",
+                )
             )
         ).scalar_one_or_none()
         if product is None:
@@ -202,25 +207,83 @@ async def get_product(product_id: int) -> dict:
     )
 
     return {
-        "product_id": product.product_id,
         "name": product.name,
-        "price_brl": product.price_brl,
+        "original_price_brl": product.price_brl,
         "final_price_brl": final_price,
         "on_promotion": final_price < product.price_brl,
         "category": category_name,
         "description": product.description,
         "in_stock": product.stock_quantity > 0,
-        "status": product.status,
         "specs": product.specs,
         "promotions": [
             {
-                "promotion_id": promo.promotion_id,
                 "discount_percent": promo.discount_percent,
                 "final_price_brl": _final_price(product.price_brl, promo.discount_percent),
                 "description": promo.description,
             }
             for promo in promotions
         ],
+    }
+
+
+@mcp.tool()
+async def get_categories() -> dict:
+    """List all store categories with their descriptions.
+
+    Use this for broad catalog questions like "quais instrumentos vocês vendem?"
+    or "que tipos de produto têm?". It returns the full category list so the
+    agent does not need to guess or search by keyword.
+    """
+    async with _get_session_factory()() as session:
+        rows = (
+            await session.execute(
+                select(models.Category).order_by(models.Category.category_id)
+            )
+        ).scalars().all()
+
+    return {
+        "categories": [
+            {
+                "category_id": c.category_id,
+                "name": c.name,
+                "description": c.description,
+            }
+            for c in rows
+        ]
+    }
+
+
+@mcp.tool()
+async def get_products_by_category(category_id: int, limit: int = 5) -> dict:
+    """Return active products belonging to a category, with price and availability.
+
+    Useful for "quais violões vocês têm?" or "me mostre os teclados". Inactive
+    products are never returned, and raw stock counts are intentionally not
+    exposed.
+    """
+    bounded = max(1, min(int(limit or 5), _SEARCH_RESULTS_CAP))
+
+    async with _get_session_factory()() as session:
+        rows = (
+            await session.execute(
+                select(models.Product)
+                .where(
+                    models.Product.category_id == category_id,
+                    models.Product.status == "active",
+                )
+                .order_by(models.Product.name)
+                .limit(bounded)
+            )
+        ).scalars().all()
+
+        promotions = await _active_promotions_by_product(
+            session, [p.product_id for p in rows]
+        )
+
+    return {
+        "products": [
+            _product_summary(p, promotions.get(p.product_id, [])) for p in rows
+        ]
     }
 
 
@@ -258,13 +321,11 @@ def _product_summary(product, promotions: list) -> dict:
         default=product.price_brl,
     )
     return {
-        "product_id": product.product_id,
         "name": product.name,
-        "price_brl": product.price_brl,
+        "original_price_brl": product.price_brl,
         "final_price_brl": final_price,
         "on_promotion": final_price < product.price_brl,
         "in_stock": product.stock_quantity > 0,
-        "status": product.status,
     }
 
 

@@ -135,6 +135,8 @@ Public catalog and promotion tools may accept product or catalog parameters beca
 
 All tools use typed schemas, parameterized queries, read-only database credentials, and bounded result sizes. The model never receives raw tables or arbitrary SQL access. Product tools expose availability as an `in_stock` boolean rather than a raw stock count, applying least privilege so internal quantities cannot leak into customer answers.
 
+The catalog is exposed through three tools: `search_products` (name/description keyword lookup), `get_product` (full detail for a known product id), and `get_categories` / `get_products_by_category` (browse the catalog by category). Product results carry `original_price_brl`, `final_price_brl` (after the best active promotion), `on_promotion`, and `in_stock`, and deliberately omit internal fields such as `product_id`, `status`, and `stock_quantity`. Inactive products are excluded from every catalog tool, including `get_product` (which reports "not found" rather than returning an inactive row).
+
 ### 6.3 Policy retrieval tool
 
 The RAG retriever is exposed to the agent as a information and knowledge search capability. It returns section-aware chunks with source metadata.

@@ -351,6 +351,12 @@ async def on_message(message: cl.Message) -> None:
         )
         await status_step.send()
 
+    async def _hide_status() -> None:
+        nonlocal status_step
+        if status_step is not None:
+            await status_step.remove()
+            status_step = None
+
     tool_steps: dict[str, cl.Step] = {}
     current_event: str | None = None
     try:
@@ -378,16 +384,14 @@ async def on_message(message: cl.Message) -> None:
                         elif current_event == "debug":
                             await _render_debug_event(payload, tool_steps, answer.id)
                         elif current_event == "token":
-                            if status_step is not None:
-                                status_step.name = STATUS_LABELS["preparing_response"]
-                                await status_step.update()
+                            await _hide_status()
                             await answer.stream_token(payload["content"])
                         elif current_event == "error":
+                            await _hide_status()
                             await answer.stream_token("\n\nDesculpe, ocorreu um erro.")
     except httpx.HTTPError:
+        await _hide_status()
         await answer.stream_token("\n\nNão foi possível conectar ao backend.")
 
-    if status_step is not None:
-        status_step.name = "Concluído"
-        await status_step.update()
+    await _hide_status()
     await answer.update()
