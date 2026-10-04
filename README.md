@@ -40,13 +40,53 @@ For local development of the Python code you additionally need `uv`; see [Local 
 
 3. The UI signs in automatically as a local admin (identifier `admin`; override with `CHAINLIT_ADMIN_USER`). No password is required. The login is what lets Chainlit persist and resume conversations.
 
-4. In the left sidebar, choose a **Cliente (simulação)** and a **Modelo**, then chat. Selecting a new customer or model starts a new conversation session. Previous conversations appear in the sidebar and can be resumed; reloading the page keeps the current session.
+4. In the left sidebar, choose a **Cliente (simulação)**, a **Modelo**, a **Raciocínio** mode, and optionally enable **Modo debug**, then chat. Selecting a new customer or model starts a **fresh conversation**: the current thread is cleared and the new customer is greeted. Changing **Raciocínio** or **Modo debug** applies to the next message without restarting the conversation. Previous conversations appear in the sidebar and can be resumed; reloading the page keeps the current session.
+
+   **Raciocínio** controls the local model's thinking phase per request and is off by default (`Desligado (rápido)`). Enabling it (`Ligado (reflexivo)`) improves tool selection and grounding but is slower on CPU; it does not restart or reload the Ollama model.
+
+   **Modo debug** is off by default. When enabled, the UI shows the agent's status (`Pensando...`, `Consultando os dados...`, `Preparando a resposta...`) and each tool call with its arguments and returned result, as collapsible steps.
 
 The backend API is exposed at <http://localhost:8000> (`/docs` for OpenAPI). The MCP server is internal-only on the compose network.
 
 > Use `docker compose` (the v2 plugin), not the legacy `docker-compose` v1 binary, which does not support the Compose specification used here.
 
 > Tip: to reuse an Ollama already running on the host instead of the container, set `OLLAMA_BASE_URL=http://host.docker.internal:11434` in a `.env` file and start only the other services (`docker compose up db ingest mcp backend frontend`). You are then responsible for pulling `bge-m3` and `qwen3.5:4b` on the host.
+
+## Stopping and restarting
+
+Stop and remove the containers (volumes with downloaded models, database data, and saved conversations are kept):
+
+```bash
+docker compose down
+```
+
+Add `-v` (`docker compose down -v`) only when you also want to delete the `db_data` and `ollama_data` volumes; this erases the database and forces the models to be downloaded again on the next start.
+
+Restart with the same configuration:
+
+```bash
+docker compose up -d
+```
+
+After changing any value in `.env`, recreate the affected service so it picks up the new environment, then refresh the browser:
+
+```bash
+docker compose up -d --force-recreate backend frontend
+```
+
+Use `docker compose up --build` after changing Python dependencies (`pyproject.toml`/`uv.lock`) or the `Dockerfile`.
+
+## Enabling hosted models (Anthropic)
+
+1. Copy the example environment file if you have not already: `cp .env.example .env`.
+2. Set your key in `.env`, e.g. `ANTHROPIC_API_KEY=sk-ant-...`. Optionally adjust `ANTHROPIC_MODELS`.
+3. Recreate the backend (and frontend) so the new environment is read, then refresh the browser:
+
+   ```bash
+   docker compose up -d --force-recreate backend frontend
+   ```
+
+The Anthropic models now appear in the **Modelo** selector. Without a key, only the local Ollama models are offered.
 
 ## Local development
 
@@ -78,7 +118,7 @@ CHAINLIT_DB_URL=postgresql+asyncpg://emporium:emporium@localhost:5433/emporium \
   uv run chainlit run services/frontend/app.py --port 8001
 ```
 
-The frontend listens on `8001` to avoid clashing with the backend on `8000`. Set `SHOW_AGENT_STEPS=true` to display the internal retrieval/tool status steps (a developer aid, hidden by default).
+The frontend listens on `8001` to avoid clashing with the backend on `8000`. Set `SHOW_AGENT_STEPS=true` to make the **Modo debug** setting default to enabled (a developer aid, hidden by default).
 
 ## Configuration
 
@@ -93,12 +133,14 @@ Configuration is read from environment variables (or a `.env` file). See [`.env.
 | `OLLAMA_BASE_URL` | `http://ollama:11434` | Ollama runtime |
 | `EMBEDDING_MODEL` | `bge-m3` | Embedding model (1024-dim) |
 | `OLLAMA_NUM_CTX` | `4096` | Context window for the local generation model |
+| `OLLAMA_REASONING` | `false` | Default thinking mode for local models: `false` (direct, faster), `true`, `low`/`medium`/`high`, or `none` (model default). Overridable per request from the **Raciocínio** setting |
+| `OLLAMA_NUM_PREDICT` | `512` | Upper bound on generated tokens for the local model |
 | `DEFAULT_MODEL` | `ollama/qwen3.5:4b` | Default generation model |
 | `MODEL_ALLOWLIST` | `ollama/qwen3.5:4b` | Local models selectable in the UI |
 | `ANTHROPIC_API_KEY` | (empty) | Enables the Anthropic models below when set |
 | `ANTHROPIC_MODELS` | `anthropic/claude-haiku-4-5,anthropic/claude-sonnet-5-5` | Hosted models shown once a key is set |
 | `POLICY_SIMILARITY_THRESHOLD` | `0.5` | Minimum cosine similarity for retrieval |
-| `SHOW_AGENT_STEPS` | `false` | Show internal agent status steps in the UI |
+| `SHOW_AGENT_STEPS` | `false` | Default state of the **Modo debug** chat setting |
 | `CHAINLIT_DB_URL` | (empty) | Enables thread persistence/resume when set (async SQLAlchemy URL) |
 | `CHAINLIT_ADMIN_USER` | `admin` | Identifier used for the automatic local admin sign-in |
 | `CHAINLIT_AUTH_SECRET` | `change-me-in-production` | Secret used to sign UI session cookies |
@@ -123,6 +165,8 @@ The suite covers CSV ingestion idempotency, referential integrity, customer-scop
 - The MCP server enforces read-only access in code and via a read-only DB role; it is reachable only on the internal compose network.
 - Thread persistence uses Chainlit's own tables in the same Postgres database; deleting the `db_data` volume resets both operational data and saved conversations.
 - The container uses Python 3.12. Python 3.14 is not usable with Chainlit 2.12: Chainlit calls `nest_asyncio.apply()` and `nest-asyncio` 1.6.0 (unmaintained) breaks `asyncio.current_task()` on 3.14, which makes `anyio.to_thread` fail and prevents the UI's static assets from loading (blank page).
+- The default local model `qwen3.5:4b` is a *thinking* model; its reasoning phase is disabled by default (`OLLAMA_REASONING=false`) so it answers directly and stays responsive on CPU. Re-enabling reasoning improves tool selection but is significantly slower without a GPU.
+- Stock is exposed to the agent only as an `in_stock` boolean; exact stock quantities are never returned to the model, so they cannot reach the customer.
 - Caching, compression, response validation, and retrieval reranking are deferred extensions.
 
 ## Assumptions
@@ -131,7 +175,7 @@ The suite covers CSV ingestion idempotency, referential integrity, customer-scop
 - WhatsApp Numbers: The policy manual lists two different numbers. The number in the company contact block, `(67) 3341-4444`, is treated as the operational company contact. The number in the customer-service section, `(67) 3321-4500`, is treated as the customer-service WhatsApp contact.
 - CSV Inconsistencies: CSV content is preserved without correction, even if the source may contain product name/description or specification conflicts and order totals that differ from the sum of order items. These issues are noted but considered out-of-scope for this project, and the agent must not silently invent a reconciliation.
 - Signed MCP context: The backend binds the session customer to every MCP call through an HMAC-signed bearer token (`Authorization`) verified by the MCP server. This is the "signed transport mechanism" of the architecture. The MCP server rejects requests without a valid token.
-- Fixture customers: The frontend shows a hardcoded list of fixture customers (there is no customer-listing endpoint). The backend validates the selected `customer_id` against the `customers` table before creating a session.
+- Fixture customers: The frontend shows a hardcoded list of all 50 fixture customers (there is no customer-listing endpoint). The backend validates the selected `customer_id` against the `customers` table before creating a session.
 
 ## Decision rationale
 

@@ -18,6 +18,8 @@ class CreateSessionResponse(BaseModel):
 
 class MessageRequest(BaseModel):
     content: str
+    debug: bool = False
+    reasoning: bool | None = None
 
 
 class ModelInfo(BaseModel):

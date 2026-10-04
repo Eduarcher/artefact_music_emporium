@@ -126,7 +126,13 @@ async def get_customer_last_orders(n: int = 3) -> dict:
 
 @mcp.tool()
 async def search_products(keyword: str, limit: int = 5) -> dict:
-    """Search the catalog by name or description keyword."""
+    """Search the catalog by name or description keyword.
+
+    Each result includes ``final_price_brl``, the price after the best active
+    promotion (same as ``price_brl`` when the product is not on promotion), so
+    quote the final price directly. ``in_stock`` tells whether the item is
+    available; raw stock counts are intentionally not exposed.
+    """
     bounded = max(1, min(int(limit or 5), _SEARCH_RESULTS_CAP))
     pattern = f"%{keyword}%"
 
@@ -144,23 +150,24 @@ async def search_products(keyword: str, limit: int = 5) -> dict:
             )
         ).scalars().all()
 
+        promotions = await _active_promotions_by_product(
+            session, [p.product_id for p in rows]
+        )
+
     return {
         "products": [
-            {
-                "product_id": p.product_id,
-                "name": p.name,
-                "price_brl": p.price_brl,
-                "stock_quantity": p.stock_quantity,
-                "status": p.status,
-            }
-            for p in rows
+            _product_summary(p, promotions.get(p.product_id, [])) for p in rows
         ]
     }
 
 
 @mcp.tool()
 async def get_product(product_id: int) -> dict:
-    """Return full details of a single product, including active promotions."""
+    """Return full details of a single product, including active promotions.
+
+    ``in_stock`` tells whether the item is available; raw stock counts are
+    intentionally not exposed.
+    """
     async with _get_session_factory()() as session:
         product = (
             await session.execute(
@@ -189,18 +196,27 @@ async def get_product(product_id: int) -> dict:
             )
         ).scalars().all()
 
+    final_price = min(
+        (_final_price(product.price_brl, promo.discount_percent) for promo in promotions),
+        default=product.price_brl,
+    )
+
     return {
         "product_id": product.product_id,
         "name": product.name,
         "price_brl": product.price_brl,
+        "final_price_brl": final_price,
+        "on_promotion": final_price < product.price_brl,
         "category": category_name,
         "description": product.description,
-        "stock_quantity": product.stock_quantity,
+        "in_stock": product.stock_quantity > 0,
         "status": product.status,
         "specs": product.specs,
         "promotions": [
             {
+                "promotion_id": promo.promotion_id,
                 "discount_percent": promo.discount_percent,
+                "final_price_brl": _final_price(product.price_brl, promo.discount_percent),
                 "description": promo.description,
             }
             for promo in promotions
@@ -208,17 +224,58 @@ async def get_product(product_id: int) -> dict:
     }
 
 
+def _final_price(price_brl: float, discount_percent: float | None) -> float:
+    if not discount_percent:
+        return price_brl
+    return round(price_brl * (1 - discount_percent / 100), 2)
+
+
+async def _active_promotions_by_product(session, product_ids: list[int]) -> dict[int, list]:
+    """Return active promotions grouped by product id, best discount first."""
+    grouped: dict[int, list] = {pid: [] for pid in product_ids}
+    if not product_ids:
+        return grouped
+
+    rows = (
+        await session.execute(
+            select(models.Promotion)
+            .where(
+                models.Promotion.product_id.in_(product_ids),
+                models.Promotion.is_active.is_(True),
+            )
+            .order_by(models.Promotion.discount_percent.desc())
+        )
+    ).scalars().all()
+    for promo in rows:
+        grouped.setdefault(promo.product_id, []).append(promo)
+    return grouped
+
+
+def _product_summary(product, promotions: list) -> dict:
+    """Product fields plus the effective price after the best active promotion."""
+    final_price = min(
+        (_final_price(product.price_brl, promo.discount_percent) for promo in promotions),
+        default=product.price_brl,
+    )
+    return {
+        "product_id": product.product_id,
+        "name": product.name,
+        "price_brl": product.price_brl,
+        "final_price_brl": final_price,
+        "on_promotion": final_price < product.price_brl,
+        "in_stock": product.stock_quantity > 0,
+        "status": product.status,
+    }
+
+
 def _promotion_row(promo, product, category_name: str | None) -> dict:
-    final_price = product.price_brl
-    if promo.discount_percent:
-        final_price = round(product.price_brl * (1 - promo.discount_percent / 100), 2)
     return {
         "product_id": product.product_id,
         "product_name": product.name,
         "category": category_name,
         "discount_percent": promo.discount_percent,
         "original_price_brl": product.price_brl,
-        "final_price_brl": final_price,
+        "final_price_brl": _final_price(product.price_brl, promo.discount_percent),
         "description": promo.description,
     }
 

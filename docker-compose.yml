@@ -4,6 +4,9 @@ x-common-env: &common-env
   DATABASE_URL: postgresql+asyncpg://emporium:emporium@db:5432/emporium
   OLLAMA_BASE_URL: http://ollama:11434
   EMBEDDING_MODEL: bge-m3
+  OLLAMA_NUM_CTX: ${OLLAMA_NUM_CTX:-4096}
+  OLLAMA_REASONING: ${OLLAMA_REASONING:-false}
+  OLLAMA_NUM_PREDICT: ${OLLAMA_NUM_PREDICT:-512}
   MCP_SHARED_SECRET: ${MCP_SHARED_SECRET:-change-me-in-production}
 
 services:

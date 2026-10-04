@@ -4,12 +4,12 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
-from langchain_mcp_adapters.client import MultiServerMCPClient
 from sse_starlette.sse import EventSourceResponse
 
 from emporium.agent.model import build_model
 from emporium.agent.prompts import load_system_prompt
 from emporium.agent.runner import stream_turn
+from emporium.api.mcp_tools import MCPToolProvider
 from emporium.api.schemas import (
     ConfigResponse,
     CreateSessionRequest,
@@ -23,7 +23,6 @@ from emporium.db.engine import create_engine, create_session_factory
 from emporium.db.init_db import init_db
 from emporium.rag.embedder import build_embedder
 from emporium.rag.retriever import PolicyRetriever
-from emporium.security import sign_customer_token
 from emporium.sessions import service as session_service
 from emporium.tools.policy_tool import build_policy_tool
 
@@ -53,6 +52,7 @@ async def lifespan(app: FastAPI):
     app.state.session_factory = session_factory
     app.state.policy_tool = build_policy_tool(retriever)
     app.state.system_prompt = load_system_prompt()
+    app.state.mcp_tools = MCPToolProvider(get_settings())
 
     yield
 
@@ -116,7 +116,7 @@ async def send_message(session_id: str, body: MessageRequest) -> EventSourceResp
 
     async def event_stream() -> AsyncIterator[dict]:
         try:
-            async for event in _run_turn(session_row, body.content):
+            async for event in _run_turn(session_row, body.debug, body.reasoning):
                 yield event
         except Exception:  # noqa: BLE001
             logger.exception("turn failed for session %s", session_id)
@@ -128,40 +128,27 @@ async def send_message(session_id: str, body: MessageRequest) -> EventSourceResp
     return EventSourceResponse(event_stream())
 
 
-async def _run_turn(session_row, user_content: str) -> AsyncIterator[dict]:
-    settings = get_settings()
+async def _run_turn(
+    session_row, debug: bool, reasoning: bool | None
+) -> AsyncIterator[dict]:
     session_factory = app.state.session_factory
 
-    token = sign_customer_token(
-        settings.mcp_shared_secret,
-        customer_id=session_row.customer_id,
-        session_id=session_row.session_id,
-        ttl_seconds=settings.mcp_context_ttl_seconds,
+    mcp_tools = await app.state.mcp_tools.get_tools(
+        customer_id=session_row.customer_id, session_id=session_row.session_id
     )
-
-    mcp_client = MultiServerMCPClient(
-        {
-            "operational": {
-                "transport": "streamable_http",
-                "url": settings.mcp_url,
-                "headers": {"Authorization": f"Bearer {token}"},
-            }
-        }
-    )
-    mcp_tools = await mcp_client.get_tools()
 
     tools = [*mcp_tools, app.state.policy_tool]
-    model = build_model(session_row.model)
+    model = build_model(session_row.model, reasoning=reasoning)
     history = await session_service.get_transcript(session_factory, session_row.session_id)
-    recursion_limit = settings.agent_max_iterations * 2 + 2
+    recursion_limit = get_settings().agent_max_iterations * 2 + 2
 
     async for event in stream_turn(
         model=model,
         tools=tools,
         system_prompt=app.state.system_prompt,
         history=history,
-        user_message=user_content,
         recursion_limit=recursion_limit,
+        debug=debug,
     ):
         if event["type"] == "done":
             await session_service.add_message(
@@ -173,5 +160,7 @@ async def _run_turn(session_row, user_content: str) -> AsyncIterator[dict]:
             yield {"event": "done", "data": json.dumps({"session_id": session_row.session_id})}
         elif event["type"] == "status":
             yield {"event": "status", "data": json.dumps({"status": event["status"]})}
+        elif event["type"] == "debug":
+            yield {"event": "debug", "data": json.dumps(event)}
         elif event["type"] == "token":
             yield {"event": "token", "data": json.dumps({"content": event["content"]})}

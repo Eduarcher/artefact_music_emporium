@@ -220,3 +220,6 @@ __marimo__/
 # Chainlit auto-generated files (.chainlit/config.toml is intentionally tracked)
 .chainlit/translations/
 .chainlit/.files/
+
+# Local scratch / saved artifacts
+tmp/

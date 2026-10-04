@@ -57,7 +57,7 @@ The async design addresses `NFR2`, but blocking model, embedding, PDF, or databa
 
 ### 4.4 Frontend: Chainlit
 
-Chainlit provides the reference chat UI, streaming display, and administrative settings. The customer selector is explicitly an admin/testing affordance, not a login flow. The model selector is also administrative and must be restricted to configured models.
+Chainlit provides the reference chat UI, streaming display, and administrative settings. The customer selector is explicitly an admin/testing affordance, not a login flow. The model selector is also administrative and must be restricted to configured models. The **Raciocínio** setting toggles the local model's thinking phase per request, and **Modo debug** (off by default) controls whether the UI renders status and tool-call steps; neither requires restarting the model runtime.
 
 During a multi-step turn, the backend emits user-facing status events. The UI can show messages such as:
 
@@ -67,7 +67,7 @@ During a multi-step turn, the backend emits user-facing status events. The UI ca
 - `preparing_response`: "Preparando a resposta..."
 - `validating_response`: "Conferindo a resposta..."
 
-These statuses improve transparency without exposing hidden chain-of-thought or raw internal tool arguments.
+In debug mode the backend additionally emits `debug` events carrying the tool name, its arguments, and the returned result. These improve transparency for local testing. Hidden chain-of-thought is never emitted; when reasoning is enabled the model's thinking is handled by the runtime and is not streamed into the answer.
 
 ### 4.5 Data storage: Postgres, pgvector, and SQLAlchemy
 
@@ -133,7 +133,7 @@ The exact profile fields returned by `get_customer()` should follow least privil
 
 Public catalog and promotion tools may accept product or catalog parameters because those parameters do not identify another customer.
 
-All tools use typed schemas, parameterized queries, read-only database credentials, and bounded result sizes. The model never receives raw tables or arbitrary SQL access.
+All tools use typed schemas, parameterized queries, read-only database credentials, and bounded result sizes. The model never receives raw tables or arbitrary SQL access. Product tools expose availability as an `in_stock` boolean rather than a raw stock count, applying least privilege so internal quantities cannot leak into customer answers.
 
 ### 6.3 Policy retrieval tool
 

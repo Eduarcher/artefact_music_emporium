@@ -44,3 +44,43 @@ async def test_get_active_promotions_returns_all(engine, session_factory) -> Non
     result = await mcp_server.get_active_promotions()
 
     assert {p["product_id"] for p in result["promotions"]} == {90, 94, 121, 127}
+
+
+async def test_search_products_applies_active_promotion(engine, session_factory) -> None:
+    """A product lookup returns the discounted final price automatically."""
+    await _prepare(engine, session_factory)
+
+    result = await mcp_server.search_products("Crafter HT-100")
+    product = next(p for p in result["products"] if p["product_id"] == 90)
+
+    assert product["price_brl"] == 2399.0
+    assert product["final_price_brl"] == 1967.18
+    assert product["on_promotion"] is True
+    assert product["in_stock"] is True
+    assert "stock_quantity" not in product
+
+
+async def test_search_products_without_promotion_keeps_full_price(
+    engine, session_factory
+) -> None:
+    await _prepare(engine, session_factory)
+
+    result = await mcp_server.search_products("Yamaha C40")
+    product = next(p for p in result["products"] if p["product_id"] == 81)
+
+    assert product["price_brl"] == 599.9
+    assert product["final_price_brl"] == 599.9
+    assert product["on_promotion"] is False
+
+
+async def test_get_product_applies_active_promotion(engine, session_factory) -> None:
+    await _prepare(engine, session_factory)
+
+    product = await mcp_server.get_product(94)
+
+    assert product["price_brl"] == 5999.0
+    assert product["final_price_brl"] == 5519.08
+    assert product["on_promotion"] is True
+    assert product["in_stock"] is True
+    assert "stock_quantity" not in product
+    assert product["promotions"][0]["final_price_brl"] == 5519.08

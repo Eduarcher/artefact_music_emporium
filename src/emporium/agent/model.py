@@ -7,7 +7,9 @@ from emporium.config import get_settings
 _OLLAMA_PREFIX = "ollama/"
 
 
-def build_model(model_id: str | None = None) -> BaseChatModel:
+def build_model(
+    model_id: str | None = None, reasoning: bool | str | None = None
+) -> BaseChatModel:
     settings = get_settings()
     model = model_id or settings.default_model
     if model not in settings.available_models:
@@ -19,6 +21,8 @@ def build_model(model_id: str | None = None) -> BaseChatModel:
             base_url=settings.ollama_base_url,
             temperature=0,
             num_ctx=settings.ollama_num_ctx,
+            num_predict=settings.ollama_num_predict,
+            reasoning=settings.reasoning_mode if reasoning is None else reasoning,
         )
 
     if model.startswith("anthropic/") and settings.anthropic_api_key:

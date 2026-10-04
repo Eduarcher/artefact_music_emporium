@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     embedding_model: str = "bge-m3"
     embedding_dim: int = 1024
     ollama_num_ctx: int = 4096
+    # Reasoning/thinking mode for thinking-capable local models. "false" answers
+    # directly (fast); "true" enables it; "low"/"medium"/"high" set intensity;
+    # "none" uses the model default.
+    ollama_reasoning: str = "false"
+    # Upper bound on generated tokens, to avoid runaway generation.
+    ollama_num_predict: int = 512
 
     # Local model allowlist exposed to the frontend. Comma-separated LiteLLM model ids.
     default_model: str = "ollama/qwen3.5:4b"
@@ -78,6 +84,18 @@ class Settings(BaseSettings):
     def available_models(self) -> list[str]:
         """All models selectable through the admin UI."""
         return [*self.allowed_models, *self.hosted_models]
+
+    @property
+    def reasoning_mode(self) -> bool | str | None:
+        """Map the ``ollama_reasoning`` setting to ChatOllama's ``reasoning`` value."""
+        value = self.ollama_reasoning.strip().lower()
+        if value in {"false", "0", "no", "off", ""}:
+            return False
+        if value in {"true", "1", "yes", "on"}:
+            return True
+        if value == "none":
+            return None
+        return value
 
     @property
     def mcp_db_url(self) -> str:
