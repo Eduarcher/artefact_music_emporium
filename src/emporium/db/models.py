@@ -7,6 +7,7 @@ from sqlalchemy import (
     Date,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -45,6 +46,10 @@ class Product(Base):
     status: Mapped[str] = mapped_column(String(50))
     specs: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    __table_args__ = (
+        Index("ix_products_category_price", "category_id", "price_brl"),
+    )
 
 
 class Customer(Base):

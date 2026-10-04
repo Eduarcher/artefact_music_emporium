@@ -24,6 +24,19 @@ _session_factory: async_sessionmaker[AsyncSession] | None = None
 _LAST_ORDERS_CAP = 10
 _SEARCH_RESULTS_CAP = 10
 
+_STATUS_LABELS_PT = {
+    "delivered": "Entregue",
+    "shipped": "Enviado",
+    "confirmed": "Confirmado",
+    "pending": "Pendente",
+    "cancelled": "Cancelado",
+}
+
+
+def _translate_status(status: str) -> str:
+    return _STATUS_LABELS_PT.get(status, status)
+
+
 mcp = FastMCP(
     name="emporio-operational-data",
     transport_security=TransportSecuritySettings(
@@ -56,7 +69,11 @@ def _bounded_n(n: int, *, default: int = 3, cap: int = _LAST_ORDERS_CAP) -> int:
 
 @mcp.tool()
 async def get_customer() -> dict:
-    """Return the profile of the customer bound to the current session."""
+    """Return the name and city of the customer bound to the current session.
+
+    No other customer can be queried: this always returns the customer whose
+    identity the backend bound to this conversation.
+    """
     context = get_customer_context()
     async with _get_session_factory()() as session:
         row = (
@@ -66,12 +83,16 @@ async def get_customer() -> dict:
         ).scalar_one_or_none()
     if row is None:
         return {"error": "customer not found"}
-    return {"customer_id": row.customer_id, "name": row.name, "city": row.city}
+    return {"name": row.name, "city": row.city}
 
 
 @mcp.tool()
 async def get_customer_last_orders(n: int = 3) -> dict:
-    """Return the current customer's most recent orders, most recent first."""
+    """Return the current customer's most recent orders, most recent first.
+
+    Status is already translated to Portuguese. Cancelled orders include a
+    ``cancellation_reason``. ``n`` is capped at 10.
+    """
     context = get_customer_context()
     limit = _bounded_n(n)
 
@@ -110,7 +131,8 @@ async def get_customer_last_orders(n: int = 3) -> dict:
             {
                 "order_id": o.order_id,
                 "order_date": o.order_date.isoformat() if o.order_date else None,
-                "status": o.status,
+                "status": _translate_status(o.status),
+                "cancellation_reason": o.notes if o.status == "cancelled" else None,
                 "total_brl": o.total_brl,
                 "payment_method": o.payment_method,
                 "tracking_code": o.tracking_code,
@@ -128,12 +150,13 @@ async def get_customer_last_orders(n: int = 3) -> dict:
 async def search_products(keyword: str, limit: int = 5) -> dict:
     """Search active catalog products by name or description keyword.
 
-    Each result includes ``original_price_brl`` (the list price) and
-    ``final_price_brl`` (the price after the best active promotion, same as
-    ``original_price_brl`` when the product is not on promotion); quote the
-    final price directly. ``in_stock`` tells whether the item is available;
-    raw stock counts are intentionally not exposed. Inactive products are never
-    returned.
+    Use this to find products by name, brand or a descriptive term (e.g.
+    "Yamaha", "violão eletroacústico"). Each result carries a ``product_id``
+    you can pass to ``get_product`` for full details, plus ``original_price_brl``
+    (list price) and ``final_price_brl`` (price after the best active promotion,
+    equal to the list price when not on promotion); always quote the final
+    price. ``in_stock`` tells whether the item is available; raw stock counts
+    are never exposed. Inactive products are never returned.
     """
     bounded = max(1, min(int(limit or 5), _SEARCH_RESULTS_CAP))
     pattern = f"%{keyword}%"
@@ -165,10 +188,13 @@ async def search_products(keyword: str, limit: int = 5) -> dict:
 
 @mcp.tool()
 async def get_product(product_id: int) -> dict:
-    """Return full details of a single active product, including its promotions.
+    """Return full details of a single active product, including description,
+    specs and promotions.
 
-    ``in_stock`` tells whether the item is available; raw stock counts are
-    intentionally not exposed. Inactive products are treated as not found.
+    Call this after ``search_products`` or ``list_products_by_category`` with
+    the ``product_id`` they returned. ``in_stock`` tells whether the item is
+    available; raw stock counts are never exposed. Inactive products are
+    treated as not found.
     """
     async with _get_session_factory()() as session:
         product = (
@@ -227,51 +253,64 @@ async def get_product(product_id: int) -> dict:
 
 
 @mcp.tool()
-async def get_categories() -> dict:
-    """List all store categories with their descriptions.
+async def list_categories() -> dict:
+    """List every store category with its description.
 
     Use this for broad catalog questions like "quais instrumentos vocês vendem?"
-    or "que tipos de produto têm?". It returns the full category list so the
-    agent does not need to guess or search by keyword.
+    or "que tipos de produto têm?". It returns the full category list, so no
+    guessing is needed. Pass a category ``name`` from here to
+    ``list_products_by_category``.
     """
     async with _get_session_factory()() as session:
         rows = (
             await session.execute(
-                select(models.Category).order_by(models.Category.category_id)
+                select(models.Category).order_by(models.Category.name)
             )
         ).scalars().all()
 
     return {
         "categories": [
-            {
-                "category_id": c.category_id,
-                "name": c.name,
-                "description": c.description,
-            }
-            for c in rows
+            {"name": c.name, "description": c.description} for c in rows
         ]
     }
 
 
 @mcp.tool()
-async def get_products_by_category(category_id: int, limit: int = 5) -> dict:
-    """Return active products belonging to a category, with price and availability.
+async def list_products_by_category(category: str, limit: int = 5) -> dict:
+    """Return active products in a category, ordered from most to least expensive.
 
-    Useful for "quais violões vocês têm?" or "me mostre os teclados". Inactive
-    products are never returned, and raw stock counts are intentionally not
-    exposed.
+    ``category`` is the category ``name`` returned by ``list_categories``
+    (e.g. "Violões"). Results are sorted by price descending, so the first item
+    is the most expensive; raise ``limit`` (up to 10) to see cheaper items.
+    Inactive products are never returned, and raw stock counts are never exposed.
     """
     bounded = max(1, min(int(limit or 5), _SEARCH_RESULTS_CAP))
 
     async with _get_session_factory()() as session:
+        category_row = (
+            await session.execute(
+                select(models.Category).where(
+                    models.Category.name.ilike(category.strip())
+                )
+            )
+        ).scalar_one_or_none()
+
+        if category_row is None:
+            names = (
+                await session.execute(
+                    select(models.Category.name).order_by(models.Category.name)
+                )
+            ).scalars().all()
+            return {"error": "category not found", "categories": list(names)}
+
         rows = (
             await session.execute(
                 select(models.Product)
                 .where(
-                    models.Product.category_id == category_id,
+                    models.Product.category_id == category_row.category_id,
                     models.Product.status == "active",
                 )
-                .order_by(models.Product.name)
+                .order_by(models.Product.price_brl.desc())
                 .limit(bounded)
             )
         ).scalars().all()
@@ -321,6 +360,7 @@ def _product_summary(product, promotions: list) -> dict:
         default=product.price_brl,
     )
     return {
+        "product_id": product.product_id,
         "name": product.name,
         "original_price_brl": product.price_brl,
         "final_price_brl": final_price,
@@ -346,8 +386,9 @@ async def search_promotions(keyword: str, limit: int = 5) -> dict:
     """Search active promotions by product name, product description or category.
 
     Use this for targeted promotion questions, e.g. "promoções de violão" or
-    "tem promoção de teclado?". It never returns promotions outside the matching
-    products/categories.
+    "tem promoção de teclado?". Each result includes the product and category
+    names, the discount percent, and the original and final prices. It never
+    returns promotions outside the matching products/categories.
     """
     bounded = max(1, min(int(limit or 5), _SEARCH_RESULTS_CAP))
     pattern = f"%{keyword}%"
@@ -380,11 +421,11 @@ async def search_promotions(keyword: str, limit: int = 5) -> dict:
 
 
 @mcp.tool()
-async def get_active_promotions() -> dict:
-    """List all currently active promotions across the catalog.
+async def list_promotions() -> dict:
+    """List every currently active promotion across the catalog.
 
     Use this only for a general "quais são as promoções?" question. For a
-    specific product or category use search_promotions instead.
+    specific product or category use ``search_promotions`` instead.
     """
     async with _get_session_factory()() as session:
         rows = (

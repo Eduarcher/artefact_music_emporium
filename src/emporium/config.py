@@ -62,7 +62,7 @@ class Settings(BaseSettings):
 
     # Agent
     agent_max_iterations: int = 8
-    prompt_version: str = "v1"
+    prompt_version: str = "v2"
 
     # Local paths
     raw_data_dir: Path = PROJECT_ROOT / "data" / "raw"

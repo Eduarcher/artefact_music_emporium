@@ -38,10 +38,10 @@ async def test_search_promotions_returns_empty_when_unrelated(engine, session_fa
     assert result["promotions"] == []
 
 
-async def test_get_active_promotions_returns_all(engine, session_factory) -> None:
+async def test_list_promotions_returns_all(engine, session_factory) -> None:
     await _prepare(engine, session_factory)
 
-    result = await mcp_server.get_active_promotions()
+    result = await mcp_server.list_promotions()
 
     assert {p["product_id"] for p in result["promotions"]} == {90, 94, 121, 127}
 
@@ -59,8 +59,8 @@ async def test_search_products_applies_active_promotion(engine, session_factory)
     assert product["final_price_brl"] == 1967.18
     assert product["on_promotion"] is True
     assert product["in_stock"] is True
+    assert product["product_id"] == 90
     assert "stock_quantity" not in product
-    assert "product_id" not in product
     assert "status" not in product
 
 
@@ -108,10 +108,10 @@ async def test_get_product_rejects_inactive(engine, session_factory) -> None:
     assert await mcp_server.get_product(113) == {"error": "product not found"}
 
 
-async def test_get_categories_returns_all(engine, session_factory) -> None:
+async def test_list_categories_returns_all(engine, session_factory) -> None:
     await _prepare(engine, session_factory)
 
-    result = await mcp_server.get_categories()
+    result = await mcp_server.list_categories()
 
     names = {c["name"] for c in result["categories"]}
     assert names == {
@@ -125,21 +125,44 @@ async def test_get_categories_returns_all(engine, session_factory) -> None:
         "Cordas Orquestrais",
         "Ukuleles",
     }
-    assert all("category_id" in c and "description" in c for c in result["categories"])
+    assert all("description" in c for c in result["categories"])
+    assert all("category_id" not in c for c in result["categories"])
 
 
-async def test_get_products_by_category_returns_active_only(
+async def test_list_products_by_category_returns_active_only(
     engine, session_factory
 ) -> None:
     await _prepare(engine, session_factory)
 
-    result = await mcp_server.get_products_by_category(5, limit=10)
+    result = await mcp_server.list_products_by_category("Violões", limit=10)
 
     names = {p["name"] for p in result["products"]}
     assert "Shelby SN-7C 7 Cordas Nylon Natural" not in names
     assert all(
-        {"name", "original_price_brl", "final_price_brl", "on_promotion", "in_stock"}
+        {"product_id", "name", "original_price_brl", "final_price_brl", "on_promotion", "in_stock"}
         <= set(p)
         for p in result["products"]
     )
-    assert all("product_id" not in p and "status" not in p for p in result["products"])
+    assert all("status" not in p and "stock_quantity" not in p for p in result["products"])
+
+
+async def test_list_products_by_category_sorted_by_price_desc(
+    engine, session_factory
+) -> None:
+    await _prepare(engine, session_factory)
+
+    result = await mcp_server.list_products_by_category("Violões", limit=10)
+
+    prices = [p["original_price_brl"] for p in result["products"]]
+    assert prices == sorted(prices, reverse=True)
+
+
+async def test_list_products_by_category_rejects_unknown_name(
+    engine, session_factory
+) -> None:
+    await _prepare(engine, session_factory)
+
+    result = await mcp_server.list_products_by_category("Não Existe")
+
+    assert result["error"] == "category not found"
+    assert "Violões" in result["categories"]
