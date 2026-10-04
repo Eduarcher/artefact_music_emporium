@@ -166,3 +166,48 @@ async def test_list_products_by_category_rejects_unknown_name(
 
     assert result["error"] == "category not found"
     assert "Violões" in result["categories"]
+
+
+async def test_list_products_by_category_filters_by_max_price(
+    engine, session_factory
+) -> None:
+    await _prepare(engine, session_factory)
+
+    result = await mcp_server.list_products_by_category("Violões", max_price=1000)
+
+    names = {p["name"] for p in result["products"]}
+    assert "Yamaha C40 Nylon Natural" in names
+    assert "Tagima Memphis AC-39 Nylon Natural" in names
+    assert "Martin D-28 Dreadnought Natural" not in names
+    assert all(p["original_price_brl"] <= 1000 for p in result["products"])
+    assert result["total"] == len(result["products"]) > 0
+
+
+async def test_search_products_filters_by_max_price(engine, session_factory) -> None:
+    await _prepare(engine, session_factory)
+
+    result = await mcp_server.search_products("violão", max_price=700)
+
+    assert result["products"]
+    assert all(p["original_price_brl"] <= 700 for p in result["products"])
+
+
+async def test_list_products_by_category_paginates(engine, session_factory) -> None:
+    await _prepare(engine, session_factory)
+
+    page1 = await mcp_server.list_products_by_category("Violões", limit=2, page=1)
+    page2 = await mcp_server.list_products_by_category("Violões", limit=2, page=2)
+
+    assert len(page1["products"]) == 2
+    assert len(page2["products"]) == 2
+
+    ids1 = {p["product_id"] for p in page1["products"]}
+    ids2 = {p["product_id"] for p in page2["products"]}
+    assert ids1.isdisjoint(ids2)
+
+    assert page1["total"] == page2["total"]
+    assert page1["total"] > 4
+    assert (
+        page1["products"][0]["original_price_brl"]
+        > page2["products"][0]["original_price_brl"]
+    )

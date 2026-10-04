@@ -37,20 +37,23 @@ async def main() -> None:
     """Preload the local generation and embedding models into Ollama memory.
 
     Runs after the models are pulled so the first customer message does not pay
-    the one-time model load. Hosted-only defaults are skipped.
+    the one-time model load. Every local model in the allowlist is warmed (they
+    are the no-key fallback when the default is hosted); the embedding model is
+    always warmed.
     """
     settings = get_settings()
-    default_model = settings.default_model
-    if not default_model.startswith("ollama/"):
-        logger.info("default model %s is hosted; nothing to warm up", default_model)
-        return
 
-    generate_model = default_model.removeprefix("ollama/")
     async with httpx.AsyncClient(
         base_url=settings.ollama_base_url, timeout=_WARMUP_TIMEOUT
     ) as client:
-        await _warm_generate(client, generate_model, _KEEP_ALIVE)
-        logger.info("warmed generation model %s", generate_model)
+        for model_id in settings.allowed_models:
+            if not model_id.startswith("ollama/"):
+                logger.info("model %s is hosted; nothing to warm up", model_id)
+                continue
+            generate_model = model_id.removeprefix("ollama/")
+            await _warm_generate(client, generate_model, _KEEP_ALIVE)
+            logger.info("warmed generation model %s", generate_model)
+
         await _warm_embed(client, settings.embedding_model, _KEEP_ALIVE)
         logger.info("warmed embedding model %s", settings.embedding_model)
 

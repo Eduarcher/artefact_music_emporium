@@ -41,9 +41,9 @@ class Settings(BaseSettings):
     # Upper bound on generated tokens, to avoid runaway generation.
     ollama_num_predict: int = 512
 
-    # Local model allowlist exposed to the frontend. Comma-separated LiteLLM model ids.
-    default_model: str = "ollama/qwen3.5:4b"
-    model_allowlist: str = "ollama/qwen3.5:4b"
+    # Local Ollama model allowlist exposed to the frontend. Comma-separated ids.
+    default_model: str = "anthropic/claude-haiku-4-5"
+    ollama_model_allowlist: str = "ollama/qwen3.5:4b"
 
     # Hosted providers. Anthropic models are offered in the UI only when a key is set.
     anthropic_api_key: str = ""
@@ -71,7 +71,7 @@ class Settings(BaseSettings):
     @property
     def allowed_models(self) -> list[str]:
         """Locally served models, always available without credentials."""
-        return [m.strip() for m in self.model_allowlist.split(",") if m.strip()]
+        return [m.strip() for m in self.ollama_model_allowlist.split(",") if m.strip()]
 
     @property
     def hosted_models(self) -> list[str]:
@@ -84,6 +84,16 @@ class Settings(BaseSettings):
     def available_models(self) -> list[str]:
         """All models selectable through the admin UI."""
         return [*self.allowed_models, *self.hosted_models]
+
+    @property
+    def effective_default_model(self) -> str:
+        """Default model to offer, falling back to a local model when the
+        configured default is not available (e.g. a hosted model without a key)."""
+        if self.default_model in self.available_models:
+            return self.default_model
+        if self.allowed_models:
+            return self.allowed_models[0]
+        return self.default_model
 
     @property
     def reasoning_mode(self) -> bool | str | None:

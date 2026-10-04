@@ -45,7 +45,7 @@ LangGraph was selected instead of hand-rolling the loop because it provides type
 
 ### 4.2 Model access: LiteLLM
 
-LiteLLM is the gateway for the configured model providers. It makes the generation model replaceable without changing the agent workflow. The default is a local Ollama model to keep the normal path inexpensive and usable without API keys; Ollama remains required for embeddings. The admin model setting exposes only an application allowlist, never arbitrary provider or model strings.
+LiteLLM is the gateway for the configured model providers. It makes the generation model replaceable without changing the agent workflow. The recommended default is the hosted `anthropic/claude-haiku-4-5` model; when no provider key is configured the backend automatically falls back to the first local Ollama model in the allowlist, so the stack still runs without credentials. Ollama remains required for embeddings. The admin model setting exposes only an application allowlist, never arbitrary provider or model strings.
 
 The trade-off is accepting a relatively large abstraction layer. It is justified here because model comparison is part of the study and the same application can be evaluated with local and optional hosted providers. This is not a production data-governance decision; real deployments would need provider privacy, PII, retention, consent, and contract analysis.
 
@@ -57,13 +57,13 @@ The async design addresses `NFR2`, but blocking model, embedding, PDF, or databa
 
 ### 4.4 Frontend: Chainlit
 
-Chainlit provides the reference chat UI, streaming display, and administrative settings. The customer selector is explicitly an admin/testing affordance, not a login flow. The model selector is also administrative and must be restricted to configured models. The **Raciocínio** setting toggles the local model's thinking phase per request, and **Modo debug** (off by default) controls whether the UI renders status and tool-call steps; neither requires restarting the model runtime.
+Chainlit provides the reference chat UI, streaming display, and administrative settings. The customer selector is explicitly an admin/testing affordance, not a login flow. The model selector is also administrative and must be restricted to configured models. The **Raciocínio** setting toggles the local model's thinking phase per request, and **Modo debug** (on by default) controls whether the UI renders status and tool-call steps; neither requires restarting the model runtime.
 
 During a multi-step turn, the backend emits user-facing status events. The UI can show messages such as:
 
 - `thinking`: "Pensando..."
 - `consulting_data`: "Consultando os dados do atendimento..."
-- `consulting_policies`: "Consultando as politicas da loja..."
+- `consulting_knowledge`: "Consultando a base de conhecimento..."
 - `preparing_response`: "Preparando a resposta..."
 - `validating_response`: "Conferindo a resposta..."
 
@@ -112,7 +112,7 @@ There is no exclusive policy-versus-database intent branch. Removing that branch
 
 ### 5.3 Workflow events
 
-Status events are emitted as the graph progresses. Tool names are mapped to friendly UI states: structured operational tools produce `consulting_data`, while the policy retriever produces `consulting_policies`. The final response is emitted only after the graph finishes.
+Status events are emitted as the graph progresses. Tool names are mapped to friendly UI states: structured operational tools produce `consulting_data`, while the knowledge-base retriever produces `consulting_knowledge`. The final response is emitted only after the graph finishes.
 
 Response validation is an optional extension. If enabled, the UI may show `validating_response`; if validation fails, the response is hidden and replaced with a specific safe-failure message.
 
@@ -135,11 +135,13 @@ Public catalog and promotion tools may accept product or catalog parameters beca
 
 All tools use typed schemas, parameterized queries, read-only database credentials, and bounded result sizes. The model never receives raw tables or arbitrary SQL access. Product tools expose availability as an `in_stock` boolean rather than a raw stock count, applying least privilege so internal quantities cannot leak into customer answers.
 
-The catalog is exposed through six tools: `search_products` (name/description keyword lookup), `get_product` (full detail for a known product id), `list_categories` / `list_products_by_category` (browse the catalog by category), and `search_promotions` / `list_promotions` (promotion lookup). Product summaries carry `product_id` (a handle for the follow-up `get_product` call), `name`, `original_price_brl`, `final_price_brl` (after the best active promotion), `on_promotion`, and `in_stock`, while deliberately omitting internal fields such as `status` and `stock_quantity`. Categories are addressed by name, never by numeric id. Inactive products are excluded from every catalog tool, including `get_product` (which reports "not found" rather than returning an inactive row). `list_products_by_category` returns products ordered by price descending so the agent can answer price-range questions without an extra comparison step.
+The catalog is exposed through six tools: `search_products` (name/description keyword lookup), `get_product` (full detail for a known product id), `list_categories` / `list_products_by_category` (browse the catalog by category), and `search_promotions` / `list_promotions` (promotion lookup). Product summaries carry `product_id` (a handle for the follow-up `get_product` call), `name`, `original_price_brl`, `final_price_brl` (after the best active promotion), `on_promotion`, and `in_stock`, while deliberately omitting internal fields such as `status` and `stock_quantity`. Categories are addressed by name, never by numeric id. Inactive products are excluded from every catalog tool, including `get_product` (which reports "not found" rather than returning an inactive row).
 
-### 6.3 Policy retrieval tool
+`list_products_by_category` returns products ordered by price descending. Both it and `search_products` accept an optional `max_price` (list-price upper bound) so price-range questions can be answered directly, and are paginated: each call returns at most `limit` products (default and cap 30) plus a `total` count, letting the agent request further `page`s when `total` exceeds what was returned.
 
-The RAG retriever is exposed to the agent as a information and knowledge search capability. It returns section-aware chunks with source metadata.
+### 6.3 Knowledge retrieval tool
+
+The RAG retriever is exposed to the agent as a single `search_knowledge` tool that searches the store's knowledge base (company data, hours, payments, returns, shipping, promotions, warranty, privacy) and returns section-aware chunks with source metadata.
 
 ## 7. Policy retrieval
 

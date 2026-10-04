@@ -16,7 +16,7 @@ The agent answers recurring customer-service questions for a musical-instrument 
 - **Structured operational data** (`products`, `customers`, `orders`, `order_items`, `promotions`, `categories`) exposed to the agent as read-only, typed tools through a dedicated **MCP server**.
 - **Unstructured policy data** (`políticas_da_loja.pdf`) chunked by section, embedded with **BGE-M3**, and retrieved from **pgvector** via cosine similarity.
 
-The agent is a **LangGraph ReAct loop**: it decides whether to answer directly, retrieve a policy, call one tool, or call several tools in the same turn. A **LiteLLM** gateway selects the generation model: the default is the local `ollama/qwen3.5:4b`, and hosted **Anthropic** models (Haiku/Sonnet) can be enabled by setting an API key. **Ollama** is always the local runtime for generation and embeddings.
+The agent is a **LangGraph ReAct loop**: it decides whether to answer directly, retrieve a policy, call one tool, or call several tools in the same turn. A **LiteLLM** gateway selects the generation model: the recommended default is the hosted `anthropic/claude-haiku-4-5` model (enable it by setting an API key), and the local `ollama/qwen3.5:4b` is the automatic no-key fallback. **Ollama** is always the local runtime for generation fallback and embeddings.
 
 The stack runs behind `docker compose`: `db` (Postgres + pgvector), `ollama`, `ollama-pull` and `ollama-warmup` (one-shot model download and preload), `ingest` (one-shot data materialization), `mcp` (operational-data tools), `backend` (FastAPI agent runtime), and `frontend` (Chainlit chat UI). See [ARCHITECTURE.md](./docs/ARCHITECTURE.md) for details.
 
@@ -44,7 +44,7 @@ For local development of the Python code you additionally need `uv`; see [Local 
 
    **Raciocínio** controls the local model's thinking phase per request and is off by default (`Desligado (rápido)`). Enabling it (`Ligado (reflexivo)`) improves tool selection and grounding but is slower on CPU; it does not restart or reload the Ollama model.
 
-   **Modo debug** is off by default. When enabled, the UI shows the agent's status (`Pensando...`, `Consultando os dados...`) while it works, then each tool call with its arguments and returned result as collapsible steps; the transient status step disappears as soon as the answer starts streaming.
+   **Modo debug** is on by default so the agent's reasoning is transparent during testing. When enabled, the UI shows the agent's status (`Pensando...`, `Consultando os dados...`) while it works, then each tool call with its arguments and returned result as collapsible steps; the transient status step disappears as soon as the answer starts streaming. Set `SHOW_AGENT_STEPS=false` to make it default to off.
 
 The backend API is exposed at <http://localhost:8000> (`/docs` for OpenAPI). The MCP server is internal-only on the compose network.
 
@@ -78,6 +78,8 @@ Use `docker compose up --build` after changing Python dependencies (`pyproject.t
 
 ## Enabling hosted models (Anthropic)
 
+The recommended default model is hosted `claude-haiku-4-5`. To use it:
+
 1. Copy the example environment file if you have not already: `cp .env.example .env`.
 2. Set your key in `.env`, e.g. `ANTHROPIC_API_KEY=sk-ant-...`. Optionally adjust `ANTHROPIC_MODELS`.
 3. Recreate the backend (and frontend) so the new environment is read, then refresh the browser:
@@ -86,7 +88,7 @@ Use `docker compose up --build` after changing Python dependencies (`pyproject.t
    docker compose up -d --force-recreate backend frontend
    ```
 
-The Anthropic models now appear in the **Modelo** selector. Without a key, only the local Ollama models are offered.
+With a key set, `claude-haiku-4-5` is the default model and the Anthropic models appear in the **Modelo** selector. Without a key, the backend falls back to the first `OLLAMA_MODEL_ALLOWLIST` model (`ollama/qwen3.5:4b`) so the stack still runs out of the box.
 
 ## Local development
 
@@ -118,7 +120,7 @@ CHAINLIT_DB_URL=postgresql+asyncpg://emporium:emporium@localhost:5433/emporium \
   uv run chainlit run services/frontend/app.py --port 8001
 ```
 
-The frontend listens on `8001` to avoid clashing with the backend on `8000`. Set `SHOW_AGENT_STEPS=true` to make the **Modo debug** setting default to enabled (a developer aid, hidden by default).
+The frontend listens on `8001` to avoid clashing with the backend on `8000`. `SHOW_AGENT_STEPS` defaults to `true`, making the **Modo debug** setting enabled out of the box (a developer aid); set it to `false` to hide the debug steps by default.
 
 ## Configuration
 
@@ -135,12 +137,12 @@ Configuration is read from environment variables (or a `.env` file). See [`.env.
 | `OLLAMA_NUM_CTX` | `4096` | Context window for the local generation model |
 | `OLLAMA_REASONING` | `false` | Default thinking mode for local models: `false` (direct, faster), `true`, `low`/`medium`/`high`, or `none` (model default). Overridable per request from the **Raciocínio** setting |
 | `OLLAMA_NUM_PREDICT` | `512` | Upper bound on generated tokens for the local model |
-| `DEFAULT_MODEL` | `ollama/qwen3.5:4b` | Default generation model |
-| `MODEL_ALLOWLIST` | `ollama/qwen3.5:4b` | Local models selectable in the UI |
+| `DEFAULT_MODEL` | `anthropic/claude-haiku-4-5` | Recommended generation model (hosted). Falls back to the first `OLLAMA_MODEL_ALLOWLIST` entry when no API key is set |
+| `OLLAMA_MODEL_ALLOWLIST` | `ollama/qwen3.5:4b` | Local models selectable in the UI and used as the no-key fallback |
 | `ANTHROPIC_API_KEY` | (empty) | Enables the Anthropic models below when set |
 | `ANTHROPIC_MODELS` | `anthropic/claude-haiku-4-5,anthropic/claude-sonnet-5-5` | Hosted models shown once a key is set |
 | `POLICY_SIMILARITY_THRESHOLD` | `0.5` | Minimum cosine similarity for retrieval |
-| `SHOW_AGENT_STEPS` | `false` | Default state of the **Modo debug** chat setting |
+| `SHOW_AGENT_STEPS` | `true` | Default state of the **Modo debug** chat setting |
 | `CHAINLIT_DB_URL` | (empty) | Enables thread persistence/resume when set (async SQLAlchemy URL) |
 | `CHAINLIT_ADMIN_USER` | `admin` | Identifier used for the automatic local admin sign-in |
 | `CHAINLIT_AUTH_SECRET` | `change-me-in-production` | Secret used to sign UI session cookies |
@@ -165,7 +167,7 @@ The suite covers CSV ingestion idempotency, referential integrity, customer-scop
 - The MCP server enforces read-only access in code and via a read-only DB role; it is reachable only on the internal compose network.
 - Thread persistence uses Chainlit's own tables in the same Postgres database; deleting the `db_data` volume resets both operational data and saved conversations.
 - The container uses Python 3.12. Python 3.14 is not usable with Chainlit 2.12: Chainlit calls `nest_asyncio.apply()` and `nest-asyncio` 1.6.0 (unmaintained) breaks `asyncio.current_task()` on 3.14, which makes `anyio.to_thread` fail and prevents the UI's static assets from loading (blank page).
-- The default local model `qwen3.5:4b` is a *thinking* model; its reasoning phase is disabled by default (`OLLAMA_REASONING=false`) so it answers directly and stays responsive on CPU. Re-enabling reasoning improves tool selection but is significantly slower without a GPU.
+- The no-key local fallback model `qwen3.5:4b` is a *thinking* model; its reasoning phase is disabled by default (`OLLAMA_REASONING=false`) so it answers directly and stays responsive on CPU. It is weaker than the hosted default at tool selection and grounding; re-enabling reasoning improves it but is significantly slower without a GPU.
 - Stock is exposed to the agent only as an `in_stock` boolean; exact stock quantities are never returned to the model, so they cannot reach the customer.
 - Caching, compression, response validation, and retrieval reranking are deferred extensions.
 
@@ -181,11 +183,12 @@ The suite covers CSV ingestion idempotency, referential integrity, customer-scop
 
 - ReAct instead of intent branches: A fixed policy-versus-database router cannot reliably answer mixed questions. The agent therefore decides whether to answer, retrieve policy, call one tool, or call several tools. An iteration limit protects latency and cost without removing the multi-tool behavior required by `NFR9`.
 - Server-bound customer context: Removing customer IDs from tool schemas is stronger than relying on prompts or guardrails. The backend resolves the customer once and the tools use only that trusted context. The local admin selector is for testing by assuming customer identities.
-- Policy retrieval: The complete policy manual is ingested uniformly as a RAG source, with no special preprocessing. Persona, tone, scope, lookup rules, escalation, and other behavioral directives are written manually into the versioned system prompt, not extracted from the PDF. The retriever is designed to rank factual sections (hours, payments, returns, delivery, promotions, guarantees, privacy) above behavioral ones. A preprocessing split will only be reconsidered if testing shows behavioral sections are being surfaced.
+- Policy retrieval: The complete policy manual is ingested uniformly as a RAG source, with no special preprocessing. Persona, tone, scope, lookup rules, escalation, and other behavioral directives are written manually into the versioned system prompt, not extracted from the PDF. The retriever is exposed to the agent as a single `search_knowledge` tool covering any factual store information (address, contact, hours, payments, returns, delivery, promotions, guarantees, privacy). The retriever is designed to rank factual sections above behavioral ones. A preprocessing split will only be reconsidered if testing shows behavioral sections are being surfaced.
 - Customer tools: Customer-scoped tools use the session-bound customer internally. `get_customer()` has no parameters, and `get_customer_last_orders(n)` is capped at 10 orders. The agent cannot request another customer's record or provide an order ID to bypass the customer boundary.
 - Catalog tool handles: Categories are addressed by name (short and unambiguous), while products are addressed by `product_id`. Catalog product names are long and repetitive (e.g. `Yamaha C40 Nylon Natural`), so a numeric id is a more reliable handle for the follow-up `get_product` call than asking the model to reproduce an exact name. The id appears only in tool results, never as a user-facing value; `status` and `stock_quantity` stay hidden.
-- Price ordering: `list_products_by_category` returns products ordered by price descending, backed by an index on `(category_id, price_brl)`. This lets the agent answer "qual o mais caro?" by reading the first result. The trade-off is that "qual o mais barato?" requires a larger `limit`; the tool description documents the ordering so the model can compensate.
-- Model providers: The project is hybrid. The default is a small local Ollama model (`qwen3.5:4b`) so the stack works out of the box on CPU without credentials. Hosted Anthropic models are exposed through LiteLLM only when an API key is configured. A production system would need provider privacy, PII, retention, consent, and contractual controls.
+- Price ordering and filtering: `list_products_by_category` returns products ordered by price descending, backed by an index on `(category_id, price_brl)`. Both it and `search_products` accept a `max_price` (list-price upper bound) so the agent can answer price-range questions directly, and are paginated (default 30 per page, with a `total` count) so the agent can page through a category instead of only seeing the most expensive items. The trade-off is that `max_price` filters on the list price, not the post-promotion price.
+- Model providers: The project is hybrid. The recommended default is the hosted `anthropic/claude-haiku-4-5` model for reliable tool selection and PT-BR grounding; the local `ollama/qwen3.5:4b` is the automatic no-key fallback (`effective_default_model`). Hosted Anthropic models are exposed through LiteLLM only when an API key is configured. A production system would need provider privacy, PII, retention, consent, and contractual controls.
+- Customer-name grounding: The backend appends the session customer's first name to the system prompt at request time so the model can address the customer by name without an extra tool call. Only the first name is injected (least privilege); the full profile remains behind the customer-scoped `get_customer` tool.
 
 ## Future
 

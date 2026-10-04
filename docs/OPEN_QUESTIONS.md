@@ -6,10 +6,10 @@ Running log of design decisions that are still open, under research, or deferred
 
 ## 1. Default generation model
 
-- **Question:** Which local (Ollama) model should ship as the default so the agent works well out of the box, without API keys, in Portuguese?
-- **State:** Decided — `qwen3.5:4b` local default, optional Anthropic models.
-- **Decision:** A small local model is the default so the stack runs on CPU without credentials. `qwen3.5:4b` supports native tool calling and PT-BR while keeping memory and cold-start cost low; the larger 9B variant was dropped because it is slow without a GPU. Hosted Anthropic models (`anthropic/claude-haiku-4-5`, `anthropic/claude-sonnet-5-5`) are offered in the admin selector only when `ANTHROPIC_API_KEY` is set. The default is swappable at runtime via the Chainlit settings panel; the allowlist is configured with `MODEL_ALLOWLIST` and `ANTHROPIC_MODELS`.
-- **Note:** LiteLLM's Ollama integration dropped tool calls for this model (it returns tool calls as a dict rather than a JSON string), so local `ollama/*` models are served through the native `langchain-ollama` integration while LiteLLM remains the gateway for hosted providers.
+- **Question:** Which generation model should ship as the default so the agent works well out of the box in Portuguese?
+- **State:** Decided — hosted `anthropic/claude-haiku-4-5` recommended default, local `qwen3.5:4b` fallback.
+- **Decision:** The hosted `anthropic/claude-haiku-4-5` model is the recommended default because a 4B local model proved too weak for reliable tool selection and grounding in PT-BR (repeated greetings, mixing policy sections, answering without consulting the catalog). To preserve the no-key out-of-the-box path, the backend exposes an `effective_default_model`: when `ANTHROPIC_API_KEY` is unset it automatically falls back to the first local model in `OLLAMA_MODEL_ALLOWLIST` (`qwen3.5:4b`). Hosted Anthropic models are shown in the admin selector only when `ANTHROPIC_API_KEY` is set.
+- **Note:** LiteLLM's Ollama integration dropped tool calls for `qwen3.5:4b` (it returns tool calls as a dict rather than a JSON string), so local `ollama/*` models are served through the native `langchain-ollama` integration while LiteLLM remains the gateway for hosted providers.
 
 ## 2. Prompt-injection defense depth
 

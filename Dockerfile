@@ -19,6 +19,7 @@ COPY prompts ./prompts
 COPY services ./services
 COPY data ./data
 COPY .chainlit ./.chainlit
+COPY public ./public
 COPY chainlit.md ./chainlit.md
 
 # Install the project itself against the already-populated environment.

@@ -30,4 +30,9 @@ def build_model(
             model=model, temperature=0, max_retries=2, api_key=settings.anthropic_api_key
         )
 
+    if model.startswith("anthropic/"):
+        raise ValueError(
+            f"Model '{model}' requires ANTHROPIC_API_KEY, which is not configured"
+        )
+
     return ChatLiteLLM(model=model, temperature=0, max_retries=2)

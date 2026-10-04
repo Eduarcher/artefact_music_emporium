@@ -61,7 +61,8 @@ services:
     build: .
     environment:
       <<: *common-env
-      DEFAULT_MODEL: ${DEFAULT_MODEL:-ollama/qwen3.5:4b}
+      DEFAULT_MODEL: ${DEFAULT_MODEL:-anthropic/claude-haiku-4-5}
+      OLLAMA_MODEL_ALLOWLIST: ${OLLAMA_MODEL_ALLOWLIST:-ollama/qwen3.5:4b}
     depends_on:
       ollama-pull:
         condition: service_completed_successfully
@@ -93,8 +94,8 @@ services:
     environment:
       <<: *common-env
       MCP_URL: http://mcp:8000/mcp
-      DEFAULT_MODEL: ${DEFAULT_MODEL:-ollama/qwen3.5:4b}
-      MODEL_ALLOWLIST: ${MODEL_ALLOWLIST:-ollama/qwen3.5:4b}
+      DEFAULT_MODEL: ${DEFAULT_MODEL:-anthropic/claude-haiku-4-5}
+      OLLAMA_MODEL_ALLOWLIST: ${OLLAMA_MODEL_ALLOWLIST:-ollama/qwen3.5:4b}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_MODELS: ${ANTHROPIC_MODELS:-anthropic/claude-haiku-4-5,anthropic/claude-sonnet-5-5}
     ports:
@@ -104,20 +105,30 @@ services:
         condition: service_started
       ingest:
         condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
     command: ["uvicorn", "emporium.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
 
   frontend:
     build: .
     environment:
       BACKEND_URL: http://backend:8000
-      SHOW_AGENT_STEPS: ${SHOW_AGENT_STEPS:-false}
+      SHOW_AGENT_STEPS: ${SHOW_AGENT_STEPS:-true}
       CHAINLIT_DB_URL: postgresql+asyncpg://emporium:emporium@db:5432/emporium
       CHAINLIT_AUTH_SECRET: ${CHAINLIT_AUTH_SECRET:-change-me-in-production}
     ports:
       - "8001:8001"
     depends_on:
       backend:
-        condition: service_started
+        condition: service_healthy
     command: ["chainlit", "run", "services/frontend/app.py", "--host", "0.0.0.0", "--port", "8001"]
 
   test:

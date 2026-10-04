@@ -2,7 +2,7 @@ import json
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -22,7 +22,8 @@ _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 
 _LAST_ORDERS_CAP = 10
-_SEARCH_RESULTS_CAP = 10
+_SEARCH_RESULTS_CAP = 30
+_SEARCH_RESULTS_DEFAULT = 30
 
 _STATUS_LABELS_PT = {
     "delivered": "Entregue",
@@ -65,6 +66,22 @@ def _bounded_n(n: int, *, default: int = 3, cap: int = _LAST_ORDERS_CAP) -> int:
     except (TypeError, ValueError):
         value = default
     return max(1, min(value, cap))
+
+
+def _page_offset(page: int, limit: int) -> int:
+    try:
+        value = int(page)
+    except (TypeError, ValueError):
+        value = 1
+    return (max(1, value) - 1) * limit
+
+
+def _bounded_limit(limit: int) -> int:
+    try:
+        value = int(limit)
+    except (TypeError, ValueError):
+        value = _SEARCH_RESULTS_DEFAULT
+    return max(1, min(value, _SEARCH_RESULTS_CAP))
 
 
 @mcp.tool()
@@ -147,7 +164,12 @@ async def get_customer_last_orders(n: int = 3) -> dict:
 
 
 @mcp.tool()
-async def search_products(keyword: str, limit: int = 5) -> dict:
+async def search_products(
+    keyword: str,
+    max_price: float | None = None,
+    page: int = 1,
+    limit: int = _SEARCH_RESULTS_DEFAULT,
+) -> dict:
     """Search active catalog products by name or description keyword.
 
     Use this to find products by name, brand or a descriptive term (e.g.
@@ -157,20 +179,39 @@ async def search_products(keyword: str, limit: int = 5) -> dict:
     equal to the list price when not on promotion); always quote the final
     price. ``in_stock`` tells whether the item is available; raw stock counts
     are never exposed. Inactive products are never returned.
+
+    Use ``max_price`` to filter by list price (only products with a list price
+    up to this value are returned). Results are paginated: at most ``limit``
+    products (default 30) are returned per call, and ``total`` reports how many
+    products match overall. When ``total`` is greater than ``page * limit``,
+    call again with ``page`` incremented to see the rest.
     """
-    bounded = max(1, min(int(limit or 5), _SEARCH_RESULTS_CAP))
+    bounded = _bounded_limit(limit)
+    offset = _page_offset(page, bounded)
     pattern = f"%{keyword}%"
+    max_price_value = max_price if isinstance(max_price, (int, float)) else None
 
     async with _get_session_factory()() as session:
+        conditions = [
+            models.Product.status == "active",
+            (models.Product.name.ilike(pattern))
+            | (models.Product.description.ilike(pattern)),
+        ]
+        if max_price_value is not None:
+            conditions.append(models.Product.price_brl <= max_price_value)
+
+        total = (
+            await session.execute(
+                select(func.count()).select_from(models.Product).where(*conditions)
+            )
+        ).scalar_one()
+
         rows = (
             await session.execute(
                 select(models.Product)
-                .where(
-                    models.Product.status == "active",
-                    (models.Product.name.ilike(pattern))
-                    | (models.Product.description.ilike(pattern)),
-                )
+                .where(*conditions)
                 .order_by(models.Product.name)
+                .offset(offset)
                 .limit(bounded)
             )
         ).scalars().all()
@@ -182,7 +223,10 @@ async def search_products(keyword: str, limit: int = 5) -> dict:
     return {
         "products": [
             _product_summary(p, promotions.get(p.product_id, [])) for p in rows
-        ]
+        ],
+        "total": total,
+        "page": offset // bounded + 1,
+        "limit": bounded,
     }
 
 
@@ -276,15 +320,29 @@ async def list_categories() -> dict:
 
 
 @mcp.tool()
-async def list_products_by_category(category: str, limit: int = 5) -> dict:
+async def list_products_by_category(
+    category: str,
+    max_price: float | None = None,
+    page: int = 1,
+    limit: int = _SEARCH_RESULTS_DEFAULT,
+) -> dict:
     """Return active products in a category, ordered from most to least expensive.
 
     ``category`` is the category ``name`` returned by ``list_categories``
-    (e.g. "Violões"). Results are sorted by price descending, so the first item
-    is the most expensive; raise ``limit`` (up to 10) to see cheaper items.
-    Inactive products are never returned, and raw stock counts are never exposed.
+    (e.g. "Violões"). Results are sorted by list price descending, so the first
+    item is the most expensive. Use ``max_price`` to filter by list price (only
+    products up to this value are returned) — for example, to answer
+    "violões até R$ 1000" call with ``max_price=1000``.
+
+    Results are paginated: at most ``limit`` products (default 30) are returned
+    per call, and ``total`` reports how many products match overall. When
+    ``total`` is greater than ``page * limit``, call again with ``page``
+    incremented to see the rest. Inactive products are never returned, and raw
+    stock counts are never exposed.
     """
-    bounded = max(1, min(int(limit or 5), _SEARCH_RESULTS_CAP))
+    bounded = _bounded_limit(limit)
+    offset = _page_offset(page, bounded)
+    max_price_value = max_price if isinstance(max_price, (int, float)) else None
 
     async with _get_session_factory()() as session:
         category_row = (
@@ -303,14 +361,25 @@ async def list_products_by_category(category: str, limit: int = 5) -> dict:
             ).scalars().all()
             return {"error": "category not found", "categories": list(names)}
 
+        conditions = [
+            models.Product.category_id == category_row.category_id,
+            models.Product.status == "active",
+        ]
+        if max_price_value is not None:
+            conditions.append(models.Product.price_brl <= max_price_value)
+
+        total = (
+            await session.execute(
+                select(func.count()).select_from(models.Product).where(*conditions)
+            )
+        ).scalar_one()
+
         rows = (
             await session.execute(
                 select(models.Product)
-                .where(
-                    models.Product.category_id == category_row.category_id,
-                    models.Product.status == "active",
-                )
+                .where(*conditions)
                 .order_by(models.Product.price_brl.desc())
+                .offset(offset)
                 .limit(bounded)
             )
         ).scalars().all()
@@ -322,7 +391,10 @@ async def list_products_by_category(category: str, limit: int = 5) -> dict:
     return {
         "products": [
             _product_summary(p, promotions.get(p.product_id, [])) for p in rows
-        ]
+        ],
+        "total": total,
+        "page": offset // bounded + 1,
+        "limit": bounded,
     }
 
 

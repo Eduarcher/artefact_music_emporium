@@ -11,7 +11,7 @@ from starlette.datastructures import Headers
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000")
 CHAINLIT_DB_URL = os.environ.get("CHAINLIT_DB_URL", "")
 
-DEBUG_DEFAULT = os.environ.get("SHOW_AGENT_STEPS", "false").lower() in {"1", "true", "yes"}
+DEBUG_DEFAULT = os.environ.get("SHOW_AGENT_STEPS", "true").lower() in {"1", "true", "yes"}
 
 ADMIN_USER = os.environ.get("CHAINLIT_ADMIN_USER", "admin")
 
@@ -76,7 +76,7 @@ REASONING_VALUES = {
 STATUS_LABELS = {
     "thinking": "Pensando...",
     "consulting_data": "Consultando os dados do atendimento...",
-    "consulting_policies": "Consultando as políticas da loja...",
+    "consulting_knowledge": "Consultando a base de conhecimento...",
     "preparing_response": "Preparando a resposta...",
     "validating_response": "Conferindo a resposta...",
 }
@@ -94,16 +94,31 @@ if CHAINLIT_DB_URL:
         return cl.User(identifier=ADMIN_USER, metadata={"role": "admin"})
 
 
-async def _fetch_models() -> tuple[list[tuple[str, str]], str]:
+async def _fetch_models() -> tuple[list[dict], str]:
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(f"{BACKEND_URL}/api/config")
         resp.raise_for_status()
         data = resp.json()
-    return [(m["id"], m["label"]) for m in data["models"]], data["default_model"]
+    models = [
+        {
+            "id": m["id"],
+            "label": m["label"],
+            "supports_reasoning": m.get("supports_reasoning", False),
+        }
+        for m in data["models"]
+    ]
+    return models, data["default_model"]
 
 
-def _model_choice(model_id: str, label: str) -> str:
-    return f"{label} | {model_id}"
+def _model_choice(model: dict) -> str:
+    return f"{model['label']} | {model['id']}"
+
+
+def _model_supports_reasoning(models: list[dict], model_id: str) -> bool:
+    for model in models:
+        if model["id"] == model_id:
+            return bool(model.get("supports_reasoning", False))
+    return False
 
 
 def _parse_model_choice(value: str) -> str:
@@ -204,11 +219,15 @@ def _settings_payload(settings: dict) -> tuple[int, str, bool, bool]:
     )
 
 
-def _build_settings(models: list[tuple[str, str]], restored: dict | None = None) -> cl.ChatSettings:
+def _build_settings(models: list[dict], restored: dict | None = None) -> cl.ChatSettings:
     restored = restored or {}
-    model_values = [_model_choice(model_id, label) for model_id, label in models]
+    model_values = [_model_choice(m) for m in models]
     customer_values = [_customer_choice(c) for c in FIXTURE_CUSTOMERS]
     reasoning_values = list(REASONING_VALUES.values())
+
+    model_value = _first_match(restored.get("model"), model_values, 0)
+    model_id = _parse_model_choice(model_value)
+    reasoning_enabled = _model_supports_reasoning(models, model_id)
 
     return cl.ChatSettings(
         [
@@ -222,7 +241,7 @@ def _build_settings(models: list[tuple[str, str]], restored: dict | None = None)
                 id="model",
                 label="Modelo",
                 values=model_values,
-                initial_value=_first_match(restored.get("model"), model_values, 0),
+                initial_value=model_value,
             ),
             Select(
                 id="reasoning",
@@ -231,6 +250,7 @@ def _build_settings(models: list[tuple[str, str]], restored: dict | None = None)
                 initial_value=_first_match(
                     restored.get("reasoning"), reasoning_values, 0
                 ),
+                disabled=not reasoning_enabled,
             ),
             Switch(
                 id="debug",
@@ -251,13 +271,14 @@ def _first_match(value: Any, values: list[str], default_index: int) -> str:
 async def on_chat_start() -> None:
     models, _default_model = await _fetch_models()
     default_index = next(
-        (i for i, (model_id, _) in enumerate(models) if model_id == _default_model), 0
+        (i for i, model in enumerate(models) if model["id"] == _default_model), 0
     )
-    restored = {"model": _model_choice(*models[default_index])}
+    restored = {"model": _model_choice(models[default_index])}
 
     settings = await _build_settings(models, restored).send()
 
     customer_id, model, debug, reasoning = _settings_payload(settings)
+    cl.user_session.set("models", models)
     cl.user_session.set("debug", debug)
     cl.user_session.set("reasoning", reasoning)
     await _begin_session(customer_id=customer_id, model=model, clear=False, greet=True)
@@ -278,6 +299,7 @@ async def on_chat_resume(thread) -> None:
     await _build_settings(models, restored).send()
 
     if cl.user_session.get("session_id"):
+        cl.user_session.set("models", models)
         cl.user_session.set("debug", _as_bool(restored.get("debug"), DEBUG_DEFAULT))
         cl.user_session.set("reasoning", restored.get("reasoning") == REASONING_VALUES["on"])
         return
@@ -292,6 +314,12 @@ async def on_settings_update(settings: dict) -> None:
     cl.user_session.set("debug", debug)
     cl.user_session.set("reasoning", reasoning)
 
+    # Re-render the widgets so the Raciocínio control is disabled when the
+    # selected model has no reasoning phase. refresh() keeps the current values.
+    models = cl.user_session.get("models") or []
+    if models:
+        await _build_settings(models, settings).refresh()
+
     if (
         customer_id == cl.user_session.get("customer_id")
         and model == cl.user_session.get("model")
@@ -300,6 +328,16 @@ async def on_settings_update(settings: dict) -> None:
 
     # A new customer or model starts a fresh conversation bound to a new session.
     await _begin_session(customer_id=customer_id, model=model, clear=True, greet=True)
+
+
+def _parse_tool_output(content: Any) -> Any:
+    """Render tool results as pretty JSON when they are JSON, otherwise as text."""
+    if not isinstance(content, str):
+        return content
+    try:
+        return json.loads(content)
+    except (json.JSONDecodeError, ValueError):
+        return content
 
 
 async def _render_debug_event(
@@ -326,7 +364,7 @@ async def _render_debug_event(
             )
             await step.send()
             tool_steps[key] = step
-        step.output = payload.get("content", "")
+        step.output = _parse_tool_output(payload.get("content", ""))
         await step.update()
 
 

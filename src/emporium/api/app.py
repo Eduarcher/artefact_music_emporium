@@ -24,7 +24,7 @@ from emporium.db.init_db import init_db
 from emporium.rag.embedder import build_embedder
 from emporium.rag.retriever import PolicyRetriever
 from emporium.sessions import service as session_service
-from emporium.tools.policy_tool import build_policy_tool
+from emporium.tools.knowledge_tool import build_knowledge_tool
 
 logger = logging.getLogger("emporium.api")
 
@@ -39,6 +39,10 @@ def _model_label(model_id: str) -> str:
     return _MODEL_LABELS.get(model_id, model_id)
 
 
+def _model_supports_reasoning(model_id: str) -> bool:
+    return model_id.startswith("ollama/")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     engine = create_engine()
@@ -50,7 +54,7 @@ async def lifespan(app: FastAPI):
 
     app.state.engine = engine
     app.state.session_factory = session_factory
-    app.state.policy_tool = build_policy_tool(retriever)
+    app.state.knowledge_tool = build_knowledge_tool(retriever)
     app.state.system_prompt = load_system_prompt()
     app.state.mcp_tools = MCPToolProvider(get_settings())
 
@@ -70,8 +74,11 @@ async def health() -> dict[str, str]:
 @app.get("/api/config", response_model=ConfigResponse)
 async def config() -> ConfigResponse:
     settings = get_settings()
-    models = [ModelInfo(id=m, label=_model_label(m)) for m in settings.available_models]
-    return ConfigResponse(models=models, default_model=settings.default_model)
+    models = [
+        ModelInfo(id=m, label=_model_label(m), supports_reasoning=_model_supports_reasoning(m))
+        for m in settings.available_models
+    ]
+    return ConfigResponse(models=models, default_model=settings.effective_default_model)
 
 
 @app.post("/api/sessions", response_model=CreateSessionResponse, status_code=201)
@@ -82,7 +89,7 @@ async def create_session(body: CreateSessionRequest) -> CreateSessionResponse:
     if not await session_service.customer_exists(session_factory, body.customer_id):
         raise HTTPException(status_code=404, detail="customer not found")
 
-    model = body.model or settings.default_model
+    model = body.model or settings.effective_default_model
     if model not in settings.available_models:
         raise HTTPException(status_code=400, detail="model not allowed")
 
@@ -128,6 +135,18 @@ async def send_message(session_id: str, body: MessageRequest) -> EventSourceResp
     return EventSourceResponse(event_stream())
 
 
+def _system_prompt_with_customer(base: str, customer_name: str | None) -> str:
+    """Append the session customer's first name so the model can address them.
+
+    Only the first name is injected (least privilege); the full profile remains
+    behind the customer-scoped tools.
+    """
+    if not customer_name:
+        return base
+    first_name = customer_name.strip().split()[0]
+    return f"{base}\n\n## Cliente da sessão\nO cliente desta sessão se chama {first_name}."
+
+
 async def _run_turn(
     session_row, debug: bool, reasoning: bool | None
 ) -> AsyncIterator[dict]:
@@ -137,15 +156,19 @@ async def _run_turn(
         customer_id=session_row.customer_id, session_id=session_row.session_id
     )
 
-    tools = [*mcp_tools, app.state.policy_tool]
+    tools = [*mcp_tools, app.state.knowledge_tool]
     model = build_model(session_row.model, reasoning=reasoning)
     history = await session_service.get_transcript(session_factory, session_row.session_id)
+    customer_name = await session_service.get_customer_name(
+        session_factory, session_row.customer_id
+    )
+    system_prompt = _system_prompt_with_customer(app.state.system_prompt, customer_name)
     recursion_limit = get_settings().agent_max_iterations * 2 + 2
 
     async for event in stream_turn(
         model=model,
         tools=tools,
-        system_prompt=app.state.system_prompt,
+        system_prompt=system_prompt,
         history=history,
         recursion_limit=recursion_limit,
         debug=debug,

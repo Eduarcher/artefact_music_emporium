@@ -25,6 +25,7 @@ class MessageRequest(BaseModel):
 class ModelInfo(BaseModel):
     id: str
     label: str
+    supports_reasoning: bool = False
 
 
 class ConfigResponse(BaseModel):
