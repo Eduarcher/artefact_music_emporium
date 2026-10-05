@@ -2,6 +2,20 @@
 
 Customer-service assistant agent prototype for the fictional "Empório da Música Instrumentos Musicais Ltda." — a musical instrument store.
 
+## Index
+
+- [Documentation](#documentation)
+- [Overview](#overview)
+- [Project Design Requirements](#project-design-requirements)
+- [Quick Start](#quick-start)
+- [MCP Tools](#mcp-tools)
+- [Configuration](#configuration)
+- [Known Limitations](#known-limitations)
+- [Assumptions](#assumptions)
+- [Decision Rationale](#decision-rationale)
+- [Future Extensions](#future-extensions)
+- [AI-Assisted Development Workflow](#ai-assisted-development-workflow)
+
 ## Documentation
 
 - [Architecture](./docs/ARCHITECTURE.md) — central architecture reference (design, decisions, trade-offs).
