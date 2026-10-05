@@ -4,17 +4,34 @@ Customer-service assistant agent prototype for the fictional "Empório da Músic
 
 ## Index
 
-- [Documentation](#documentation)
-- [Overview](#overview)
-- [Project Design Requirements](#project-design-requirements)
-- [Quick Start](#quick-start)
-- [MCP Tools](#mcp-tools)
-- [Configuration](#configuration)
-- [Known Limitations](#known-limitations)
-- [Assumptions](#assumptions)
-- [Decision Rationale](#decision-rationale)
-- [Future Extensions](#future-extensions)
-- [AI-Assisted Development Workflow](#ai-assisted-development-workflow)
+- [Music Emporium Case Study](#music-emporium-case-study)
+  - [Index](#index)
+  - [Documentation](#documentation)
+  - [Overview](#overview)
+    - [High-level architecture](#high-level-architecture)
+  - [Quick Start](#quick-start)
+    - [Prerequisites](#prerequisites)
+    - [Setup](#setup)
+    - [Live Settings Configurations](#live-settings-configurations)
+    - [Stopping and restarting](#stopping-and-restarting)
+  - [MCP Tools](#mcp-tools)
+    - [Customer tools](#customer-tools)
+      - [`get_customer`](#get_customer)
+      - [`get_customer_last_orders`](#get_customer_last_orders)
+    - [Catalog tools](#catalog-tools)
+      - [`list_categories`](#list_categories)
+      - [`list_products_by_category`](#list_products_by_category)
+      - [`search_products`](#search_products)
+      - [`get_product`](#get_product)
+    - [Promotion tools](#promotion-tools)
+      - [`search_promotions`](#search_promotions)
+      - [`list_promotions`](#list_promotions)
+  - [Configuration](#configuration)
+  - [Known limitations](#known-limitations)
+  - [Assumptions](#assumptions)
+  - [Decision rationale](#decision-rationale)
+  - [Future Extensions](#future-extensions)
+  - [AI-assisted development workflow](#ai-assisted-development-workflow)
 
 ## Documentation
 
@@ -77,27 +94,6 @@ flowchart LR
 ```
 
 See the full [ARCHITECTURE.md](./docs/ARCHITECTURE.md) for more details.
-
-## Project Design Requirements
-
-### Functional Requirements
-- FR1: Receive client messages.
-- FR2: Process messages using available context, data, defined policies and rules.
-- FR3: Return a response to the client.
-- FR4: Connect to the database to recover specific information when needed.
-- FR5: Have the full session chat history or a compressed context with recent messages unchanged. The project decision is to persist the full raw transcript and defer ephemeral compression as an extension.
-
-### Non-Functional Requirements
-- NFR1: Persona aligned with the identity and tone of the Music Emporium store.
-- NFR2: Asynchronous operation for supporting multiple clients.
-- NFR3: Support for multiple clients without data leakage, system degradation or security issues.
-- NFR4: Scope-bound conversation. Gracefully handle out-of-scope questions and requests.
-- NFR5: Cost-efficient.
-- NFR6: Avoid unnecessary tool calls and RAG searches and use a cache if possible.
-- NFR7: Respectful, policy-compliant and safe.
-- NFR8: Accurate and grounded, minimizing hallucinations as much as possible. Information used should be limited to the provided context and prompt.
-- NFR9: The agent should support multiple tool calls and RAG searches for the same customer answer.
-- NFR10: Agent should only speak PT-BR to the user.
 
 ## Quick Start
 
