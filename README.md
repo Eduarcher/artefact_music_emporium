@@ -18,7 +18,7 @@ The agent dynamically utilizes information from two types of data sources:
 - **Structured operational data**: tables `products`, `customers`, `orders`, `order_items`, `promotions` and `categories` are exposed to the agent as read-only, typed tools through a dedicated MCP server.
 - **Unstructured policy data** chunked by section, embedded with BGE-M3, and retrieved from a pgvector extended database using cosine similarity search.
 
-The agent design uses a LangGraph with a ReAct loop: it decides whether to answer directly, retrieve a policy or call any number of tools until a final answer is achievable. A LiteLLM interface selects the generation model, with the recommended default being the hosted `anthropic/claude-haiku-4-5`, and the local Ollama-powered `qwen3.5:4b` as the fallback. **Ollama** is always the local runtime for embeddings.
+The agent design uses a LangGraph with a ReAct loop: it decides whether to answer directly, retrieve a policy or call any number of tools until a final answer is achievable. A LiteLLM interface selects the generation model, with the recommended default being the hosted `anthropic/claude-haiku-4-5`, and the local Ollama-powered `qwen3.5:4b` as the fallback. Ollama is always the local runtime for embeddings.
 
 The full infrastructure stack runs behind a `docker` orchestration with the following containers:
 - `db` (Postgres + pgvector)
@@ -28,6 +28,39 @@ The full infrastructure stack runs behind a `docker` orchestration with the foll
 - `mcp` (operational-data tools)
 - `backend` (FastAPI agent runtime)
 - `frontend` (Chainlit chat UI)
+
+### High-level architecture
+
+Solid arrows represent request-time interactions. Dashed arrows represent one-shot startup and data-materialization steps.
+
+```mermaid
+flowchart LR
+    Frontend["Chainlit UI"] -->|HTTP + SSE| Backend["Backend<br/>FastAPI+ LangGraph + LiteLLM"]
+
+    subgraph MCP["MCP service"]
+        Gateway["Signed, read-only MCP server"]
+        CustomerTools["Customer Tools"]
+        CatalogueTools["Catalogue Tools"]
+        Gateway --> CustomerTools
+        Gateway --> CatalogueTools
+    end
+
+    Backend -->|tool calls| Gateway
+    CustomerTools -->|read-only SQL| DB
+    CatalogueTools -->|read-only SQL| DB
+
+    DB["Postgres + pgvector<br/>operational data, policies,<br/>sessions and transcripts"]
+    Ollama["Ollama<br/>Qwen + BGE-M3"]
+    Hosted["Claude API<br/>"]
+
+    Backend -->|RAG + session data| DB
+    Backend -->|local generation + embeddings| Ollama
+    Backend -. hosted generation via LiteLLM .-> Hosted
+
+    Raw["CSV files + policy PDF"] -.-> Ingest["Ingestion job"]
+    Ingest -.-> DB
+    Ingest -. embeddings .-> Ollama
+```
 
 See the full [ARCHITECTURE.md](./docs/ARCHITECTURE.md) for more details.
 
@@ -83,7 +116,7 @@ The admin settings panel allows for testing configurations and simulating multip
 - `Cliente (simulação)`: Simulates a specific client. Useful for validating `order`-related questions and verifying that no data is leaked between clients.
 - `Modelo`: LLM model used for generation. Includes both Claude cloud models and Ollama local models.
 - `Raciocínio` controls the model's thinking phase per request. Anthropic models don't support this setting.
-- `Modo debug`: Shows the model's extended thinking and all tool calls.
+- `Modo debug`: Shows agent status updates and tool calls/results.
 
 > Anthropic models require your API key to be configured. [Get your valid key](https://platform.claude.com/docs/en/get-api-key) and insert it into the `ANTHROPIC_API_KEY` field of your `.env` file.
 

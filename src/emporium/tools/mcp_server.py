@@ -478,6 +478,7 @@ async def search_promotions(keyword: str, limit: int = 5) -> dict:
                 )
                 .where(
                     models.Promotion.is_active.is_(True),
+                    models.Product.status == "active",
                     (models.Product.name.ilike(pattern))
                     | (models.Product.description.ilike(pattern))
                     | (models.Category.name.ilike(pattern)),
@@ -510,7 +511,10 @@ async def list_promotions() -> dict:
                     models.Category,
                     models.Category.category_id == models.Product.category_id,
                 )
-                .where(models.Promotion.is_active.is_(True))
+                .where(
+                    models.Promotion.is_active.is_(True),
+                    models.Product.status == "active",
+                )
                 .order_by(models.Product.name)
             )
         ).all()

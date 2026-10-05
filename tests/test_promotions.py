@@ -38,6 +38,16 @@ async def test_search_promotions_returns_empty_when_unrelated(engine, session_fa
     assert result["promotions"] == []
 
 
+async def test_promotion_tools_exclude_inactive_products(engine, session_factory) -> None:
+    await _prepare(engine, session_factory)
+
+    search_result = await mcp_server.search_promotions("Shelby SN-7C")
+    list_result = await mcp_server.list_promotions()
+
+    assert search_result["promotions"] == []
+    assert 113 not in {promotion["product_id"] for promotion in list_result["promotions"]}
+
+
 async def test_list_promotions_returns_all(engine, session_factory) -> None:
     await _prepare(engine, session_factory)
 
