@@ -1,7 +1,7 @@
 # Architecture
 
 ## 1. Document Scope
-This document describes the system design of the Artefact Music Emporium customer-service agent: how its components are organized, how they interact, and why each technology was chosen. The requirements that motivate these decisions live in [REQUIREMENTS.md](./REQUIREMENTS.md) and are referenced here by identifier.
+This document describes the system design of the Artefact Music Emporium customer-service agent: how its components are organized, how they interact, and why each technology was chosen. The requirements that motivate these decisions are located on the `README.md` and are referenced here by identifier.
 
 Each major decision records the problem, the chosen approach, and the trade-off. This makes deliberate case-study assumptions distinguishable from production requirements.
 

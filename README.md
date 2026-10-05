@@ -1,58 +1,90 @@
-# Artefact Music Emporium - Case Study
+# Music Emporium Case Study
 
-Customer-service agent prototype for the fictional "Empório da Música Instrumentos Musicais Ltda." — a musical instrument store.
+Customer-service assistant agent prototype for the fictional "Empório da Música Instrumentos Musicais Ltda." — a musical instrument store.
 
 ## Documentation
 
-- [Requirements](./docs/REQUIREMENTS.md) - functional and non-functional requirements.
 - [Architecture](./docs/ARCHITECTURE.md) — central architecture reference (design, decisions, trade-offs).
 - [Open Questions](./docs/OPEN_QUESTIONS.md) — unresolved design decisions.
-- [Examples](./examples/) — sample conversations (policy, orders, catalog, returns, out-of-scope).
+- [Examples](./examples/) — sample conversations.
 
 ## Overview
 
-The agent answers recurring customer-service questions for a musical-instrument store: business hours, order status, product price and availability, promotions, payments, shipping, returns, warranty, and privacy. It combines two data sources per turn:
+The agent is purely informational and answers recurring customer-service questions for a musical-instrument store: business hours, order status, product price and availability, promotions, payments, shipping, return policy, warranty, and privacy. It dynamically utilizes information from two types of data sources:
 
-- **Structured operational data** (`products`, `customers`, `orders`, `order_items`, `promotions`, `categories`) exposed to the agent as read-only, typed tools through a dedicated **MCP server**.
-- **Unstructured policy data** (`políticas_da_loja.pdf`) chunked by section, embedded with **BGE-M3**, and retrieved from **pgvector** via cosine similarity.
+- **Structured operational data**: tables `products`, `customers`, `orders`, `order_items`, `promotions` and `categories` are exposed to the agent as read-only, typed tools through a dedicated MCP server.
+- **Unstructured policy data** chunked by section, embedded with BGE-M3, and retrieved from a pgvector extended database using cosine similarity search.
 
-The agent is a **LangGraph ReAct loop**: it decides whether to answer directly, retrieve a policy, call one tool, or call several tools in the same turn. A **LiteLLM** gateway selects the generation model: the recommended default is the hosted `anthropic/claude-haiku-4-5` model (enable it by setting an API key), and the local `ollama/qwen3.5:4b` is the automatic no-key fallback. **Ollama** is always the local runtime for generation fallback and embeddings.
+The agent design uses a LangGraph with a ReAct loop: it decides whether to answer directly, retrieve a policy or call any number of tools until a final answer is achievable. A LiteLLM interface selects the generation model, with the recommended default being the hosted `anthropic/claude-haiku-4-5`, and the local Ollama-powered `qwen3.5:4b` as the fallback. **Ollama** is always the local runtime for embeddings.
 
-The stack runs behind `docker compose`: `db` (Postgres + pgvector), `ollama`, `ollama-pull` and `ollama-warmup` (one-shot model download and preload), `ingest` (one-shot data materialization), `mcp` (operational-data tools), `backend` (FastAPI agent runtime), and `frontend` (Chainlit chat UI). See [ARCHITECTURE.md](./docs/ARCHITECTURE.md) for details.
+The full infrastructure stack runs behind a `docker` orchestration with the following containers:
+- `db` (Postgres + pgvector)
+- `ollama`
+- `ollama-pull` and `ollama-warmup` (one-shot model download and preload)
+- `ingest` (one-shot data materialization)
+- `mcp` (operational-data tools)
+- `backend` (FastAPI agent runtime)
+- `frontend` (Chainlit chat UI)
 
-## Requirements
+See the full [ARCHITECTURE.md](./docs/ARCHITECTURE.md) for more details.
 
-- Docker and Docker Compose (v2, invoked as `docker compose`). This is the only supported way to run the full stack. Everything, including Ollama, runs in containers.
+## Project Design Requirements
 
-For local development of the Python code you additionally need `uv`; see [Local development](#local-development).
+### Functional Requirements
+- FR1: Receive client messages.
+- FR2: Process messages using available context, data, defined policies and rules.
+- FR3: Return a response to the client.
+- FR4: Connect to the database to recover specific information when needed.
+- FR5: Have the full session chat history or a compressed context with recent messages unchanged. The project decision is to persist the full raw transcript and defer ephemeral compression as an extension.
 
-## Quick start (Docker)
+### Non-Functional Requirements
+- NFR1: Persona aligned with the identity and tone of the Music Emporium store.
+- NFR2: Asynchronous operation for supporting multiple clients.
+- NFR3: Support for multiple clients without data leakage, system degradation or security issues.
+- NFR4: Scope-bound conversation. Gracefully handle out-of-scope questions and requests.
+- NFR5: Cost-efficient.
+- NFR6: Avoid unnecessary tool calls and RAG searches and use a cache if possible.
+- NFR7: Respectful, policy-compliant and safe.
+- NFR8: Accurate and grounded, minimizing hallucinations as much as possible. Information used should be limited to the provided context and prompt.
+- NFR9: The agent should support multiple tool calls and RAG searches for the same customer answer.
+- NFR10: Agent should only speak PT-BR to the user.
 
-1. Build and start the whole stack:
+## Quick Start
 
-   ```bash
-   docker compose up --build
-   ```
+### Prerequisites
+- Docker and Docker Compose (v2, invoked as `docker compose`)
+- [OPTIONAL] Claude API key for using Anthropic models.
 
-   On the first run the `ollama-pull` service downloads `bge-m3` and `qwen3.5:4b`, `ollama-warmup` preloads them into memory (so the first message is not slowed by a cold start), and `ingest` materializes the CSVs and embeds the policy PDF. This can take several minutes depending on network and hardware. Subsequent runs reuse the `ollama_data` and `db_data` volumes.
+> If no Claude API key is configured, you will only be able to use the slower CPU-bound `qwen3.5:4b` model.
 
-2. Open the chat UI at <http://localhost:8001>.
+### Setup
 
-3. The UI signs in automatically as a local admin (identifier `admin`; override with `CHAINLIT_ADMIN_USER`). No password is required. The login is what lets Chainlit persist and resume conversations.
+1. Copy `.env.example` and rename it as `.env`. Optionally add your Claude API key to the `ANTHROPIC_API_KEY` field.
 
-4. In the left sidebar, choose a **Cliente (simulação)**, a **Modelo**, a **Raciocínio** mode, and optionally enable **Modo debug**, then chat. Selecting a new customer or model starts a **fresh conversation**: the current thread is cleared and the new customer is greeted. Changing **Raciocínio** or **Modo debug** applies to the next message without restarting the conversation. Previous conversations appear in the sidebar and can be resumed; reloading the page keeps the current session.
+2. Build and start the whole stack:
+```bash
+docker compose up --build
+```
 
-   **Raciocínio** controls the local model's thinking phase per request and is off by default (`Desligado (rápido)`). Enabling it (`Ligado (reflexivo)`) improves tool selection and grounding but is slower on CPU; it does not restart or reload the Ollama model.
+> On the first run the `ollama-pull` service downloads `bge-m3` and `qwen3.5:4b`, `ollama-warmup` preloads them into memory (so the first message is not slowed by a cold start), and `ingest` materializes the CSVs and embeds the policy PDF. This can take several minutes depending on network and hardware. Subsequent runs reuse the `ollama_data` and `db_data` volumes.
 
-   **Modo debug** is on by default so the agent's reasoning is transparent during testing. When enabled, the UI shows the agent's status (`Pensando...`, `Consultando os dados...`) while it works, then each tool call with its arguments and returned result as collapsible steps; the transient status step disappears as soon as the answer starts streaming. Set `SHOW_AGENT_STEPS=false` to make it default to off.
+3. Open the chat UI at <http://localhost:8001>.
 
-The backend API is exposed at <http://localhost:8000> (`/docs` for OpenAPI). The MCP server is internal-only on the compose network.
+> The UI signs in automatically as a local admin; no password is required.
 
-> Use `docker compose` (the v2 plugin), not the legacy `docker-compose` v1 binary, which does not support the Compose specification used here.
+### Live Settings Configurations
+The admin settings panel allows for testing configurations and simulating multiple clients. After changing the configurations, click the "Confirm" button to create a new session with the new parameters. The default configurations were used for the tests and validations shown in [Examples](./examples/).
 
-> Tip: to reuse an Ollama already running on the host instead of the container, set `OLLAMA_BASE_URL=http://host.docker.internal:11434` in a `.env` file and start only the other services (`docker compose up db ingest mcp backend frontend`). You are then responsible for pulling `bge-m3` and `qwen3.5:4b` on the host.
+![settings_panel](img/settings_panel.png)
 
-## Stopping and restarting
+- `Cliente (simulação)`: Simulates a specific client. Useful for validating `order`-related questions and verifying that no data is leaked between clients.
+- `Modelo`: LLM model used for generation. Includes both Claude cloud models and Ollama local models.
+- `Raciocínio` controls the model's thinking phase per request. Anthropic models don't support this setting.
+- `Modo debug`: Shows the model's extended thinking and all tool calls.
+
+> Anthropic models require your API key to be configured. [Get your valid key](https://platform.claude.com/docs/en/get-api-key) and insert it into the `ANTHROPIC_API_KEY` field of your `.env` file.
+
+### Stopping and restarting
 
 Stop and remove the containers (volumes with downloaded models, database data, and saved conversations are kept):
 
@@ -60,71 +92,16 @@ Stop and remove the containers (volumes with downloaded models, database data, a
 docker compose down
 ```
 
-Add `-v` (`docker compose down -v`) only when you also want to delete the `db_data` and `ollama_data` volumes; this erases the database and forces the models to be downloaded again on the next start.
-
-Restart with the same configuration:
-
+Stop and remove the containers and all volumes:
 ```bash
-docker compose up -d
+docker compose down -v
 ```
 
-After changing any value in `.env`, recreate the affected service so it picks up the new environment, then refresh the browser:
-
-```bash
-docker compose up -d --force-recreate backend frontend
-```
-
-Use `docker compose up --build` after changing Python dependencies (`pyproject.toml`/`uv.lock`) or the `Dockerfile`.
-
-## Enabling hosted models (Anthropic)
-
-The recommended default model is hosted `claude-haiku-4-5`. To use it:
-
-1. Copy the example environment file if you have not already: `cp .env.example .env`.
-2. Set your key in `.env`, e.g. `ANTHROPIC_API_KEY=sk-ant-...`. Optionally adjust `ANTHROPIC_MODELS`.
-3. Recreate the backend (and frontend) so the new environment is read, then refresh the browser:
-
-   ```bash
-   docker compose up -d --force-recreate backend frontend
-   ```
-
-With a key set, `claude-haiku-4-5` is the default model and the Anthropic models appear in the **Modelo** selector. Without a key, the backend falls back to the first `OLLAMA_MODEL_ALLOWLIST` model (`ollama/qwen3.5:4b`) so the stack still runs out of the box.
-
-## Local development
-
-This runs the Python services from the repository against a containerized Postgres and a host or containerized Ollama. `uv` manages the virtual environment and dependencies; do not install packages into the system Python.
-
-```bash
-# 1. Install dependencies (creates a project venv)
-uv sync
-
-# 2. Start Postgres, then pull the models on your Ollama and materialize the data
-docker compose up -d db
-ollama pull bge-m3
-ollama pull qwen3.5:4b
-DATABASE_URL=postgresql+asyncpg://emporium:emporium@localhost:5433/emporium \
-OLLAMA_BASE_URL=http://localhost:11434 \
-  uv run python -m emporium.ingest
-
-# 3. Run the MCP server and backend (separate terminals)
-MCP_PORT=8002 MCP_DATABASE_URL=postgresql+asyncpg://readonly:readonly@localhost:5433/emporium \
-  uv run python -m emporium.tools.mcp_server
-DATABASE_URL=postgresql+asyncpg://emporium:emporium@localhost:5433/emporium \
-MCP_URL=http://localhost:8002/mcp \
-OLLAMA_BASE_URL=http://localhost:11434 \
-  uv run uvicorn emporium.api.app:app --reload --port 8000
-
-# 4. Run the frontend on port 8001 (the backend already uses 8000)
-BACKEND_URL=http://localhost:8000 \
-CHAINLIT_DB_URL=postgresql+asyncpg://emporium:emporium@localhost:5433/emporium \
-  uv run chainlit run services/frontend/app.py --port 8001
-```
-
-The frontend listens on `8001` to avoid clashing with the backend on `8000`. `SHOW_AGENT_STEPS` defaults to `true`, making the **Modo debug** setting enabled out of the box (a developer aid); set it to `false` to hide the debug steps by default.
+## MCP Tools
+[...]
 
 ## Configuration
-
-Configuration is read from environment variables (or a `.env` file). See [`.env.example`](./.env.example) for the full list. The most important:
+Configuration is read from environment variables or a `.env` file:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -147,56 +124,51 @@ Configuration is read from environment variables (or a `.env` file). See [`.env.
 | `CHAINLIT_ADMIN_USER` | `admin` | Identifier used for the automatic local admin sign-in |
 | `CHAINLIT_AUTH_SECRET` | `change-me-in-production` | Secret used to sign UI session cookies |
 
-Hosted providers are optional. Setting `ANTHROPIC_API_KEY` adds the configured `ANTHROPIC_MODELS` to the model selector; without a key only local Ollama models are offered. LiteLLM routes `anthropic/*` models through the key.
-
-## Running tests
-
-```bash
-# against a running stack (db + ollama required)
-docker compose run --rm --profile test test
-```
-
-The suite covers CSV ingestion idempotency, referential integrity, customer-scoped tool isolation (no cross-customer leakage), promotion filtering, and policy retrieval.
+> See [`.env.example`](./.env.example) for a quick start environment.
 
 ## Known limitations
-
-- The customer selector is an **admin simulation**, not authentication of the end customer. The UI signs in automatically as a local admin (no password) purely so conversations can be persisted and resumed.
-- Complaint registration and human handoff are not wired to a ticketing system; the agent acknowledges complaints and points to human follow-up.
-- Raw CSV data may contain contradictions (e.g. order totals vs. item sums); they are preserved, never silently reconciled.
-- Prompt-injection defense is lightweight (hardened prompt + read-only tool allowlist + scope guardrails), not a dedicated classifier.
-- The MCP server enforces read-only access in code and via a read-only DB role; it is reachable only on the internal compose network.
-- Thread persistence uses Chainlit's own tables in the same Postgres database; deleting the `db_data` volume resets both operational data and saved conversations.
-- The container uses Python 3.12. Python 3.14 is not usable with Chainlit 2.12: Chainlit calls `nest_asyncio.apply()` and `nest-asyncio` 1.6.0 (unmaintained) breaks `asyncio.current_task()` on 3.14, which makes `anyio.to_thread` fail and prevents the UI's static assets from loading (blank page).
-- The no-key local fallback model `qwen3.5:4b` is a *thinking* model; its reasoning phase is disabled by default (`OLLAMA_REASONING=false`) so it answers directly and stays responsive on CPU. It is weaker than the hosted default at tool selection and grounding; re-enabling reasoning improves it but is significantly slower without a GPU.
-- Stock is exposed to the agent only as an `in_stock` boolean; exact stock quantities are never returned to the model, so they cannot reach the customer.
-- Caching, compression, response validation, and retrieval reranking are deferred extensions.
-- The answer is streamed token-by-token as the model emits it. A model that narrates its plan before calling a tool (e.g. "Deixa eu verificar…") has that narration suppressed: the backend drops any text emitted before the first tool result and streams only the final answer. See the corresponding Decision rationale entry for the buffering trade-off.
+- The customer selector is an admin simulation used purely for testing, debugging or showcasing the system, not authentication of the end customer. A production deployment would require authentication and authorization instead of this trusted admin simulation.
+- Complaint registration and human handoff are not wired to a ticketing system. The agent acknowledges complaints and points to human follow-up.
+- Raw data may contain inconsistencies that are ignored. Examples include differences between the order total and the sum of the order item totals, two different WhatsApp numbers, among others.
+- Prompt-injection defense is lightweight and limited to a hardened prompt, read-only tools and a scope guardrail.
+- Thread persistence uses Chainlit's own tables in the same Postgres database. A deeper persistence infrastructure and data lifecycle would be required for a production environment.
 
 ## Assumptions
-
-- Customer identity: The admin selector can choose one of the customer profiles to use on a testing session. This enables testing that personal customer data is not shared between sessions of different customers, since tools are integrated exclusively using the customer id of the session. A production deployment would require authentication and authorization instead of this trusted admin simulation.
-- WhatsApp Numbers: The policy manual lists two different numbers. The number in the company contact block, `(67) 3341-4444`, is treated as the operational company contact. The number in the customer-service section, `(67) 3321-4500`, is treated as the customer-service WhatsApp contact.
-- CSV Inconsistencies: CSV content is preserved without correction, even if the source may contain product name/description or specification conflicts and order totals that differ from the sum of order items. These issues are noted but considered out-of-scope for this project, and the agent must not silently invent a reconciliation.
-- Signed MCP context: The backend binds the session customer to every MCP call through an HMAC-signed bearer token (`Authorization`) verified by the MCP server. This is the "signed transport mechanism" of the architecture. The MCP server rejects requests without a valid token.
-- Fixture customers: The frontend shows a hardcoded list of all 50 fixture customers (there is no customer-listing endpoint). The backend validates the selected `customer_id` against the `customers` table before creating a session.
+- WhatsApp numbers: The policy manual lists two different numbers. The number in the company contact block, `(67) 3341-4444`, is treated as the operational company contact. The number in the customer-service section, `(67) 3321-4500`, is treated as the customer-service WhatsApp contact.
+- CSV may contain inconsistencies but the content is preserved without correction, even if the source may contain product name/description or specification conflicts and order totals that differ from the sum of order items. These issues are noted but considered out-of-scope for this project and the AI assistant agent.
+- MCP authorization is lightweight. The backend binds the session customer to every MCP call through an HMAC-signed bearer token (`Authorization`) verified by the MCP server. This is the "signed transport mechanism" of the architecture. The MCP server rejects requests without a valid token.
+- Table `order_items` carries no per-item price, so the tool `get_customer_last_orders` reports each item's `unit_price_brl` from the current catalog price. Item-level prices would therefore not reconcile with a historical order item price if one existed.
 
 ## Decision rationale
+- ReAct was chosen instead of a fixed intent branching structure. Fixed routing would not be capable of dynamically selecting two or more tools as needed during a turn to solve complex questions. An iteration limit protects latency and cost without removing the multi-tool behavior required by `NFR9`.
+- The MCP server is arguably overkill and overengineering for this project scope (a small music emporium). The current tools could easily be executed on the backend. The advantages of this more complex architecture revolve around more isolation and extensibility, since new and more costly tools could be integrated using this MCP server structure. For example, a future MCP tool that runs a parallel web search for music instrument information would require more compute power and wouldn't run on the same machine as the backend.
+- Instead of relying on prompts or guardrails, no tool can receive customer IDs directly from the agent and therefore cannot leak data from one customer to another. The backend resolves the customer once and the tools use only that trusted context. The agent cannot request another customer's record or provide an order ID to bypass the customer boundary.
+- Persona, tone, scope, lookup rules, escalation, and other behavioral directives were extracted from the policy document and written manually into the versioned system prompt. The full policy document is still chunked by sections and ingested uniformly on the vector database to be used as a RAG source.
+- A minimum similarity threshold is used when retrieving with RAG to avoid using irrelevant chunks as context, like persona and tone sections. The 0.50 cutoff value was defined empirically during the development tests.
+- Categories are addressed by name since they are short and few, while products are addressed by their `product_id` due to their long multi-word names like `Yamaha C40 Nylon Natural`. A numeric id is a more reliable handle for the follow-up `get_product` call than asking the model to reproduce an exact name. The id appears only in tool results, not as a user-facing value.
+- `list_products_by_category` returns products ordered by price descending, backed by an index on `(category_id, price_brl)`. This indirectly makes the agent see the most expensive products first and also helps with max-price filtering.
+- Both `list_products_by_category` and `search_products` accept a `max_price` so the agent can answer price-range questions directly, and are paginated (default 30 per page, with a `total` count) so the agent can page through a category instead of only seeing the most expensive items.
+- The recommended default is the hosted `anthropic/claude-haiku-4-5` model due to its low cost, fast responses, good tool selection performance and PT-BR grounding. The local `ollama/qwen3.5:4b` is the second option and is configured to run on CPU.
+- Hosted Anthropic models are exposed through LiteLLM only when an API key is configured. Since some customer data may be injected into the context for generation, a production system would need to consider provider privacy, PII, retention, consent, and contractual controls.
+- The backend appends the session customer's first name to the system prompt at request time so the model can address the customer by name without an extra tool call. Only the first name is injected and the full profile remains behind the customer-scoped `get_customer` tool.
+- The MCP server enforces read-only access in code and via a read-only DB role. This is a further security measure to prevent tools from wrongfully running write operations on the database.
+- Due to the isolation of services, the frontend was not directly connected to the store database. For simplification, the frontend shows a hardcoded list of all 50 fixture customers since there is no customer-listing endpoint. This is a static fixture for this prototype.
 
-- ReAct instead of intent branches: A fixed policy-versus-database router cannot reliably answer mixed questions. The agent therefore decides whether to answer, retrieve policy, call one tool, or call several tools. An iteration limit protects latency and cost without removing the multi-tool behavior required by `NFR9`.
-- Server-bound customer context: Removing customer IDs from tool schemas is stronger than relying on prompts or guardrails. The backend resolves the customer once and the tools use only that trusted context. The local admin selector is for testing by assuming customer identities.
-- Policy retrieval: The complete policy manual is ingested uniformly as a RAG source, with no special preprocessing. Persona, tone, scope, lookup rules, escalation, and other behavioral directives are written manually into the versioned system prompt, not extracted from the PDF. The retriever is exposed to the agent as a single `search_knowledge` tool covering any factual store information (address, contact, hours, payments, returns, delivery, promotions, guarantees, privacy). The retriever is designed to rank factual sections above behavioral ones. A preprocessing split will only be reconsidered if testing shows behavioral sections are being surfaced.
-- Customer tools: Customer-scoped tools use the session-bound customer internally. `get_customer()` has no parameters, and `get_customer_last_orders(n)` is capped at 10 orders. The agent cannot request another customer's record or provide an order ID to bypass the customer boundary.
-- Catalog tool handles: Categories are addressed by name (short and unambiguous), while products are addressed by `product_id`. Catalog product names are long and repetitive (e.g. `Yamaha C40 Nylon Natural`), so a numeric id is a more reliable handle for the follow-up `get_product` call than asking the model to reproduce an exact name. The id appears only in tool results, never as a user-facing value; `status` and `stock_quantity` stay hidden.
-- Price ordering and filtering: `list_products_by_category` returns products ordered by price descending, backed by an index on `(category_id, price_brl)`. Both it and `search_products` accept a `max_price` (list-price upper bound) so the agent can answer price-range questions directly, and are paginated (default 30 per page, with a `total` count) so the agent can page through a category instead of only seeing the most expensive items. The trade-off is that `max_price` filters on the list price, not the post-promotion price.
-- Model providers: The project is hybrid. The recommended default is the hosted `anthropic/claude-haiku-4-5` model for reliable tool selection and PT-BR grounding; the local `ollama/qwen3.5:4b` is the automatic no-key fallback (`effective_default_model`). Hosted Anthropic models are exposed through LiteLLM only when an API key is configured. A production system would need provider privacy, PII, retention, consent, and contractual controls.
-- Customer-name grounding: The backend appends the session customer's first name to the system prompt at request time so the model can address the customer by name without an extra tool call. Only the first name is injected (least privilege); the full profile remains behind the customer-scoped `get_customer` tool.
-- Debug tool panes: Each tool call renders as a single collapsible step with PT-BR `Entrada`/`Resultado` labels (the arguments and the returned result), instead of relying on Chainlit's built-in input/output rendering, which cannot be labeled in Portuguese. `search_knowledge` keeps returning prose for model grounding; the debug pane wraps it in a labeled text block rather than changing the model-facing output.
-- `get_product` handle: `get_product` accepts a numeric `product_id` and its description explicitly warns the model to use the `product_id` from a prior catalog result and never the `total`/`page`/`limit` numbers, which the local model otherwise confuses with the product id.
-- Pre-tool narration suppression: hosted models (e.g. `claude-haiku-4-5`) tend to "narrate" their plan in the content field before calling a tool, ending it with a colon (e.g. "…até R$ 2000:"). That narration is not part of the answer, and when it is concatenated directly with the answer (e.g. "…R$ 2000:Sim, Lucas!") Chainlit's frontend markdown parser treats `:Sim` as a directive and drops the word. The backend therefore buffers content until the first tool result: narration is discarded and only the final answer is streamed token-by-token. The trade-off is that the (rare) direct answers that need no tool are buffered and flushed at the end of the turn rather than streamed live, while every tool-assisted answer still streams live.
+## Future Extensions
+- Agent, tool and knowledge base response caching.
+- Chat compression for dealing with long chats.
+- Response validation and guardrails for out-of-scope generated texts.
+- Text generation and RAG performance metrics and observability.
+- Retrieval reranking and RAG hyperparameter optimization. This would reduce generation costs and get better results with a more precise context.
 
-## Future
+## AI-assisted development workflow
 
-- Caching and semantic caching.
-- Chat compression. The complete raw transcript is always persisted; any future compressed context is temporary and is never persisted.
-- Response validation.
-- Retrieval reranking.
+This project was built with AI coding assistants as a core part of the workflow. The primary tool used was opencode agents, driven especially by DeepSeek models DeepSeek V4 Pro and DeepSeek V4.1 Flash. Additionally, the GPT-6 family of models was used for unbiased validation and reviews.
+
+My workflow started with an in-depth study of the case's problem and scope. I worked to fully understand the goals for the project, take notes and write an initial AGENTS.md. I then wrote the system requirements, my initial assumptions, tech stack inclinations, open questions and overall development guidelines. This phase of the project allowed me to really understand the goal and have a clear view of the final result I would aim for.
+
+Once the project was clearly defined in the specification documents, I researched and brainstormed with multiple agents on top of my initial architecture ideas. The architecture document was written on top of the decisions of this phase and reviewed personally.
+
+With the full technical documentation in hand I was able to start development. Each service was developed and included in the container composition, followed by extensive manual testing of the complete system through the UI. Multiple coding session iterations were required to implement backend and tools adjustments, refine UX, optimize the prompt and fix minor bugs.
+
+Finally, I proceeded to validate the finished project and review the documentation.
