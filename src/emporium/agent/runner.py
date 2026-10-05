@@ -68,11 +68,20 @@ async def stream_turn(
     answer_started = False
     answer_parts: list[str] = []
     current_ai: AIMessageChunk | None = None
+    seen_tool = False
+    pending_answer: list[str] = []
 
     async for chunk, _metadata in graph.astream(
         {"messages": history}, stream_mode="messages", config=config
     ):
         if isinstance(chunk, ToolMessage):
+            # Any text emitted before the first tool call is the model narrating
+            # its plan, not part of the answer. Discard it so the narration (and
+            # its trailing colon, which Chainlit's markdown directive parser
+            # would mangle) never reaches the customer.
+            seen_tool = True
+            pending_answer.clear()
+
             # The AI message that requested the tool is now complete: its tool
             # calls carry the full arguments (streamed chunks only had partial
             # args), so emit the debug step here rather than on the first chunk.
@@ -119,10 +128,24 @@ async def stream_turn(
 
             content = chunk.content
             if isinstance(content, str) and content:
-                if not answer_started:
-                    answer_started = True
-                    yield {"type": "status", "status": STATUS_PREPARING_RESPONSE}
-                yield {"type": "token", "content": content}
-                answer_parts.append(content)
+                if seen_tool:
+                    if not answer_started:
+                        answer_started = True
+                        yield {"type": "status", "status": STATUS_PREPARING_RESPONSE}
+                    yield {"type": "token", "content": content}
+                    answer_parts.append(content)
+                else:
+                    # No tool has run yet, so this text may still be narration
+                    # followed by a tool call. Buffer it until we know.
+                    pending_answer.append(content)
+
+    # Direct answer that never called a tool: flush the buffered content as the
+    # final answer.
+    for content in pending_answer:
+        if not answer_started:
+            answer_started = True
+            yield {"type": "status", "status": STATUS_PREPARING_RESPONSE}
+        yield {"type": "token", "content": content}
+        answer_parts.append(content)
 
     yield {"type": "done", "content": "".join(answer_parts)}

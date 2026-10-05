@@ -170,7 +170,7 @@ The suite covers CSV ingestion idempotency, referential integrity, customer-scop
 - The no-key local fallback model `qwen3.5:4b` is a *thinking* model; its reasoning phase is disabled by default (`OLLAMA_REASONING=false`) so it answers directly and stays responsive on CPU. It is weaker than the hosted default at tool selection and grounding; re-enabling reasoning improves it but is significantly slower without a GPU.
 - Stock is exposed to the agent only as an `in_stock` boolean; exact stock quantities are never returned to the model, so they cannot reach the customer.
 - Caching, compression, response validation, and retrieval reranking are deferred extensions.
-- The answer is streamed token-by-token exactly as the model emits it (no buffering or rollback), so a model that narrates its plan before calling a tool can show that narration as a leading line in the answer. This is mitigated by the system prompt ("não anuncie que vai usar uma ferramenta") rather than by restructuring the streaming flow.
+- The answer is streamed token-by-token as the model emits it. A model that narrates its plan before calling a tool (e.g. "Deixa eu verificar…") has that narration suppressed: the backend drops any text emitted before the first tool result and streams only the final answer. See the corresponding Decision rationale entry for the buffering trade-off.
 
 ## Assumptions
 
@@ -192,6 +192,7 @@ The suite covers CSV ingestion idempotency, referential integrity, customer-scop
 - Customer-name grounding: The backend appends the session customer's first name to the system prompt at request time so the model can address the customer by name without an extra tool call. Only the first name is injected (least privilege); the full profile remains behind the customer-scoped `get_customer` tool.
 - Debug tool panes: Each tool call renders as a single collapsible step with PT-BR `Entrada`/`Resultado` labels (the arguments and the returned result), instead of relying on Chainlit's built-in input/output rendering, which cannot be labeled in Portuguese. `search_knowledge` keeps returning prose for model grounding; the debug pane wraps it in a labeled text block rather than changing the model-facing output.
 - `get_product` handle: `get_product` accepts a numeric `product_id` and its description explicitly warns the model to use the `product_id` from a prior catalog result and never the `total`/`page`/`limit` numbers, which the local model otherwise confuses with the product id.
+- Pre-tool narration suppression: hosted models (e.g. `claude-haiku-4-5`) tend to "narrate" their plan in the content field before calling a tool, ending it with a colon (e.g. "…até R$ 2000:"). That narration is not part of the answer, and when it is concatenated directly with the answer (e.g. "…R$ 2000:Sim, Lucas!") Chainlit's frontend markdown parser treats `:Sim` as a directive and drops the word. The backend therefore buffers content until the first tool result: narration is discarded and only the final answer is streamed token-by-token. The trade-off is that the (rare) direct answers that need no tool are buffered and flushed at the end of the turn rather than streamed live, while every tool-assisted answer still streams live.
 
 ## Future
 

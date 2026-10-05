@@ -1,3 +1,4 @@
+import litellm
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_litellm import ChatLiteLLM
 from langchain_ollama import ChatOllama
@@ -5,6 +6,10 @@ from langchain_ollama import ChatOllama
 from emporium.config import get_settings
 
 _OLLAMA_PREFIX = "ollama/"
+
+# Reasoning models such as claude-sonnet-5-5 only accept temperature=1. Dropping
+# unsupported params lets LiteLLM use the model's defaults instead of raising.
+litellm.drop_params = True
 
 
 def build_model(

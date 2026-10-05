@@ -50,9 +50,13 @@ CHAINLIT_SCHEMA_STATEMENTS: tuple[str, ...] = (
         "language" TEXT,
         "indent" INT,
         "defaultOpen" BOOLEAN,
+        "autoCollapse" BOOLEAN,
         "modes" JSONB,
         FOREIGN KEY ("threadId") REFERENCES threads("id") ON DELETE CASCADE
     )
+    """,
+    """
+    ALTER TABLE steps ADD COLUMN IF NOT EXISTS "autoCollapse" BOOLEAN
     """,
     """
     CREATE TABLE IF NOT EXISTS elements (
