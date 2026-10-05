@@ -101,7 +101,192 @@ docker compose down -v
 ```
 
 ## MCP Tools
-[...]
+
+The MCP server exposes eight read-only, typed tools to the agent over streamable HTTP. Every call carries an HMAC-signed bearer token that binds it to the session customer; no tool accepts a customer ID or order ID argument, so the model cannot cross the customer boundary. Each tool runs against a read-only database role, returns bounded results, excludes inactive products, and reports availability as a boolean instead of a raw stock count.
+
+`search_knowledge` is not an MCP tool. It is a backend retrieval tool documented in [ARCHITECTURE.md](./docs/ARCHITECTURE.md#63-knowledge-retrieval-tool).
+
+Shared return types:
+
+```
+ProductSummary = {
+  product_id: integer
+  name: string
+  original_price_brl: number
+  final_price_brl: number        // list price after the best active promotion
+  on_promotion: boolean
+  in_stock: boolean
+}
+
+Promotion = {
+  product_id: integer
+  product_name: string
+  category: string | null
+  discount_percent: number
+  original_price_brl: number
+  final_price_brl: number
+  description: string | null
+}
+```
+
+### Customer tools
+
+Customer identity is fixed by the session token and cannot be overridden by arguments. Use these tools for questions about the caller's own profile or orders.
+
+#### `get_customer`
+
+Return the profile of the customer bound to the session.
+
+Parameters: none.
+
+```
+{
+  name: string
+  city: string | null
+}
+```
+
+#### `get_customer_last_orders`
+
+Return the customer's most recent orders, newest first.
+
+| Parameter | Type | Default | Constraints |
+| --- | --- | --- | --- |
+| `n` | integer | 3 | 1 <= n <= 10 |
+
+```
+{
+  orders: [
+    {
+      order_id: integer
+      order_date: string (date) | null
+      status: string                 // Portuguese label
+      cancellation_reason: string | null   // set only when cancelled
+      total_brl: number
+      payment_method: string | null
+      tracking_code: string | null
+      estimated_delivery: string (date) | null
+      items: [
+        {
+          product_id: integer
+          name: string
+          quantity: integer
+          unit_price_brl: number     // current catalog price; order_items has no historical price
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Catalog tools
+
+Public catalog data. Categories are addressed by name; products by `product_id`, which is returned by the search and list tools as the handle for `get_product`.
+
+#### `list_categories`
+
+List every category. Use for broad questions such as "quais instrumentos vocês vendem?".
+
+Parameters: none.
+
+```
+{
+  categories: [ { name: string, description: string | null } ]
+}
+```
+
+#### `list_products_by_category`
+
+List active products in a category, ordered by list price descending. Use `max_price` for price-range questions.
+
+| Parameter | Type | Default | Constraints |
+| --- | --- | --- | --- |
+| `category` | string | — | Category name, case-insensitive |
+| `max_price` | number | null | Upper bound on list price |
+| `page` | integer | 1 | >= 1 |
+| `limit` | integer | 30 | 1 <= limit <= 30 |
+
+```
+{
+  products: ProductSummary[]
+  total: integer
+  page: integer
+  limit: integer
+}
+```
+
+Returns `{ error: string, categories: string[] }` when the category name is unknown.
+
+#### `search_products`
+
+Search active products by keyword against name and description. Results are sorted by name.
+
+| Parameter | Type | Default | Constraints |
+| --- | --- | --- | --- |
+| `keyword` | string | — | Substring of name or description |
+| `max_price` | number | null | Upper bound on list price |
+| `page` | integer | 1 | >= 1 |
+| `limit` | integer | 30 | 1 <= limit <= 30 |
+
+```
+{
+  products: ProductSummary[]
+  total: integer
+  page: integer
+  limit: integer
+}
+```
+
+#### `get_product`
+
+Return full detail for one active product. Call after a search or list tool, passing the `product_id` from a result.
+
+| Parameter | Type | Constraints |
+| --- | --- | --- |
+| `product_id` | integer | Required; from a `ProductSummary` |
+
+```
+{
+  name: string
+  original_price_brl: number
+  final_price_brl: number
+  on_promotion: boolean
+  category: string | null
+  description: string | null
+  in_stock: boolean
+  specs: object | null
+  promotions: [
+    { discount_percent: number, final_price_brl: number, description: string | null }
+  ]
+}
+```
+
+Returns `{ error: string }` for an unknown or inactive `product_id`.
+
+### Promotion tools
+
+#### `search_promotions`
+
+Search active promotions by product name, product description, or category. Use for a specific product or category.
+
+| Parameter | Type | Default | Constraints |
+| --- | --- | --- | --- |
+| `keyword` | string | — | Substring of product name/description or category |
+| `limit` | integer | 5 | 1 <= limit <= 30 |
+
+```
+{ promotions: Promotion[] }
+```
+
+#### `list_promotions`
+
+List every active promotion. Use only for the general "quais são as promoções?" question.
+
+Parameters: none.
+
+```
+{ promotions: Promotion[] }
+```
 
 ## Configuration
 Configuration is read from environment variables or a `.env` file:
