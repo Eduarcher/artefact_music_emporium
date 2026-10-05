@@ -275,10 +275,10 @@ async def on_chat_start() -> None:
     )
     restored = {"model": _model_choice(models[default_index])}
 
+    cl.user_session.set("models", models)
     settings = await _build_settings(models, restored).send()
 
     customer_id, model, debug, reasoning = _settings_payload(settings)
-    cl.user_session.set("models", models)
     cl.user_session.set("debug", debug)
     cl.user_session.set("reasoning", reasoning)
     await _begin_session(customer_id=customer_id, model=model, clear=False, greet=True)
@@ -296,10 +296,10 @@ async def on_chat_resume(thread) -> None:
     """
     restored = cl.user_session.get("chat_settings") or {}
     models, _default_model = await _fetch_models()
+    cl.user_session.set("models", models)
     await _build_settings(models, restored).send()
 
     if cl.user_session.get("session_id"):
-        cl.user_session.set("models", models)
         cl.user_session.set("debug", _as_bool(restored.get("debug"), DEBUG_DEFAULT))
         cl.user_session.set("reasoning", restored.get("reasoning") == REASONING_VALUES["on"])
         return
@@ -308,17 +308,25 @@ async def on_chat_resume(thread) -> None:
     await _begin_session(customer_id=customer_id, model=model, clear=False, greet=False)
 
 
+@cl.on_settings_edit
+async def on_settings_edit(settings: dict) -> None:
+    """Re-render the widgets on every live settings change.
+
+    Chainlit has no cross-field reactive settings, so the Raciocínio control's
+    disabled state is only recomputed when the widgets are re-emitted. Live
+    edits (before Confirm) arrive here, which keeps Raciocínio in sync with the
+    selected model without touching the user's current form values.
+    """
+    models = cl.user_session.get("models") or []
+    if models:
+        await _build_settings(models, settings).refresh()
+
+
 @cl.on_settings_update
 async def on_settings_update(settings: dict) -> None:
     customer_id, model, debug, reasoning = _settings_payload(settings)
     cl.user_session.set("debug", debug)
     cl.user_session.set("reasoning", reasoning)
-
-    # Re-render the widgets so the Raciocínio control is disabled when the
-    # selected model has no reasoning phase. refresh() keeps the current values.
-    models = cl.user_session.get("models") or []
-    if models:
-        await _build_settings(models, settings).refresh()
 
     if (
         customer_id == cl.user_session.get("customer_id")
@@ -330,41 +338,59 @@ async def on_settings_update(settings: dict) -> None:
     await _begin_session(customer_id=customer_id, model=model, clear=True, greet=True)
 
 
-def _parse_tool_output(content: Any) -> Any:
-    """Render tool results as pretty JSON when they are JSON, otherwise as text."""
-    if not isinstance(content, str):
-        return content
-    try:
-        return json.loads(content)
-    except (json.JSONDecodeError, ValueError):
-        return content
+def _debug_value(value: Any) -> tuple[str, str]:
+    """Return ``(language, text)`` for a debug value, JSON when it parses."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (json.JSONDecodeError, ValueError):
+            return "text", value
+    if isinstance(value, (dict, list)):
+        return "json", json.dumps(value, ensure_ascii=False, indent=2)
+    return "text", str(value)
+
+
+def _render_tool_debug(args: Any, result: Any) -> str:
+    """Format a tool call as clearly labeled Entrada/Resultado markdown blocks."""
+    args_lang, args_text = _debug_value(args)
+    result_lang, result_text = _debug_value(result)
+    return (
+        f"**Entrada:**\n\n```{args_lang}\n{args_text}\n```\n\n"
+        f"**Resultado:**\n\n```{result_lang}\n{result_text}\n```"
+    )
 
 
 async def _render_debug_event(
-    payload: dict, tool_steps: dict[str, cl.Step], parent_id: str | None
+    payload: dict,
+    tool_steps: dict[str, cl.Step],
+    tool_args: dict[str, Any],
+    parent_id: str | None,
 ) -> None:
     event = payload.get("event")
     key = payload.get("id") or payload.get("tool") or "tool"
 
     if event == "tool_call":
+        tool_args[key] = payload.get("args") or {}
         step = cl.Step(
             name=payload.get("tool", "tool"),
             type="tool",
-            show_input="json",
+            show_input=False,
             parent_id=parent_id,
         )
-        step.input = payload.get("args") or {}
         await step.send()
         tool_steps[key] = step
     elif event == "tool_result":
         step = tool_steps.get(key)
         if step is None:
             step = cl.Step(
-                name=payload.get("tool", "tool"), type="tool", parent_id=parent_id
+                name=payload.get("tool", "tool"),
+                type="tool",
+                show_input=False,
+                parent_id=parent_id,
             )
             await step.send()
             tool_steps[key] = step
-        step.output = _parse_tool_output(payload.get("content", ""))
+        step.output = _render_tool_debug(tool_args.get(key, {}), payload.get("content", ""))
         await step.update()
 
 
@@ -396,6 +422,7 @@ async def on_message(message: cl.Message) -> None:
             status_step = None
 
     tool_steps: dict[str, cl.Step] = {}
+    tool_args: dict[str, Any] = {}
     current_event: str | None = None
     try:
         async with httpx.AsyncClient(timeout=None) as client:
@@ -420,7 +447,7 @@ async def on_message(message: cl.Message) -> None:
                             )
                             await status_step.update()
                         elif current_event == "debug":
-                            await _render_debug_event(payload, tool_steps, answer.id)
+                            await _render_debug_event(payload, tool_steps, tool_args, answer.id)
                         elif current_event == "token":
                             await _hide_status()
                             await answer.stream_token(payload["content"])

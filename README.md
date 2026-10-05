@@ -170,6 +170,7 @@ The suite covers CSV ingestion idempotency, referential integrity, customer-scop
 - The no-key local fallback model `qwen3.5:4b` is a *thinking* model; its reasoning phase is disabled by default (`OLLAMA_REASONING=false`) so it answers directly and stays responsive on CPU. It is weaker than the hosted default at tool selection and grounding; re-enabling reasoning improves it but is significantly slower without a GPU.
 - Stock is exposed to the agent only as an `in_stock` boolean; exact stock quantities are never returned to the model, so they cannot reach the customer.
 - Caching, compression, response validation, and retrieval reranking are deferred extensions.
+- The answer is streamed token-by-token exactly as the model emits it (no buffering or rollback), so a model that narrates its plan before calling a tool can show that narration as a leading line in the answer. This is mitigated by the system prompt ("não anuncie que vai usar uma ferramenta") rather than by restructuring the streaming flow.
 
 ## Assumptions
 
@@ -189,6 +190,8 @@ The suite covers CSV ingestion idempotency, referential integrity, customer-scop
 - Price ordering and filtering: `list_products_by_category` returns products ordered by price descending, backed by an index on `(category_id, price_brl)`. Both it and `search_products` accept a `max_price` (list-price upper bound) so the agent can answer price-range questions directly, and are paginated (default 30 per page, with a `total` count) so the agent can page through a category instead of only seeing the most expensive items. The trade-off is that `max_price` filters on the list price, not the post-promotion price.
 - Model providers: The project is hybrid. The recommended default is the hosted `anthropic/claude-haiku-4-5` model for reliable tool selection and PT-BR grounding; the local `ollama/qwen3.5:4b` is the automatic no-key fallback (`effective_default_model`). Hosted Anthropic models are exposed through LiteLLM only when an API key is configured. A production system would need provider privacy, PII, retention, consent, and contractual controls.
 - Customer-name grounding: The backend appends the session customer's first name to the system prompt at request time so the model can address the customer by name without an extra tool call. Only the first name is injected (least privilege); the full profile remains behind the customer-scoped `get_customer` tool.
+- Debug tool panes: Each tool call renders as a single collapsible step with PT-BR `Entrada`/`Resultado` labels (the arguments and the returned result), instead of relying on Chainlit's built-in input/output rendering, which cannot be labeled in Portuguese. `search_knowledge` keeps returning prose for model grounding; the debug pane wraps it in a labeled text block rather than changing the model-facing output.
+- `get_product` handle: `get_product` accepts a numeric `product_id` and its description explicitly warns the model to use the `product_id` from a prior catalog result and never the `total`/`page`/`limit` numbers, which the local model otherwise confuses with the product id.
 
 ## Future
 

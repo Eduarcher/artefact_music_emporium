@@ -236,9 +236,11 @@ async def get_product(product_id: int) -> dict:
     specs and promotions.
 
     Call this after ``search_products`` or ``list_products_by_category`` with
-    the ``product_id`` they returned. ``in_stock`` tells whether the item is
-    available; raw stock counts are never exposed. Inactive products are
-    treated as not found.
+    the ``product_id`` they returned (e.g. ``get_product(product_id=95)``). Use
+    exactly the ``product_id`` value from the ``products`` list; do not pass
+    the ``total``, ``page`` or ``limit`` numbers from the search result.
+    ``in_stock`` tells whether the item is available; raw stock counts are
+    never exposed. Inactive products are treated as not found.
     """
     async with _get_session_factory()() as session:
         product = (
