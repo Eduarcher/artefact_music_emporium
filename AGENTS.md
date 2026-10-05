@@ -12,7 +12,7 @@
 ---
 
 ## Requirements
-> Check `docs/REQUIREMENTS.md` for the full project requirements.
+> Check the Project Design Requirements section in `docs/ARCHITECTURE.md` for the full project requirements.
 
 ---
 
