@@ -10,8 +10,11 @@ Customer-service assistant agent prototype for the fictional "Empório da Músic
 
 ## Overview
 
-The agent is purely informational and answers recurring customer-service questions for a musical-instrument store: business hours, order status, product price and availability, promotions, payments, shipping, return policy, warranty, and privacy. It dynamically utilizes information from two types of data sources:
+The agent is purely informational and answers recurring customer-service questions for a musical-instrument store: business hours, order status, product price and availability, promotions, payments, shipping, return policy, warranty, and privacy. An example of live usage is showed below.
 
+![example_search_category](./examples/example1_search_category.png)
+
+The agent dynamically utilizes information from two types of data sources:
 - **Structured operational data**: tables `products`, `customers`, `orders`, `order_items`, `promotions` and `categories` are exposed to the agent as read-only, typed tools through a dedicated MCP server.
 - **Unstructured policy data** chunked by section, embedded with BGE-M3, and retrieved from a pgvector extended database using cosine similarity search.
 
