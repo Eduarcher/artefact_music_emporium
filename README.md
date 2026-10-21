@@ -41,7 +41,7 @@ Customer-service assistant agent prototype for the fictional "Empório da Músic
 
 ## Overview
 
-The agent is purely informational and answers recurring customer-service questions for a musical-instrument store: business hours, order status, product price and availability, promotions, payments, shipping, return policy, warranty, and privacy. An example of live usage is showed below.
+The agent is purely informational and answers recurring customer-service questions for a musical-instrument store: business hours, order status, product price and availability, promotions, payments, shipping, return policy, warranty, and privacy. An example of live usage is shown below.
 
 ![example_search_category](./examples/example1_search_category.png)
 
@@ -340,6 +340,7 @@ Configuration is read from environment variables or a `.env` file:
 | `MCP_DATABASE_URL` | (falls back to `DATABASE_URL`) | Read-only DB for the MCP server |
 | `MCP_URL` | `http://mcp:8000/mcp` | MCP server endpoint |
 | `MCP_SHARED_SECRET` | `change-me-in-production` | HMAC secret for customer context |
+| `MCP_ALLOWED_HOSTS` | `mcp:*,localhost:*,127.0.0.1:*,[::1]:*` | Host headers accepted by the MCP HTTP transport (DNS-rebinding protection) |
 | `OLLAMA_BASE_URL` | `http://ollama:11434` | Ollama runtime |
 | `EMBEDDING_MODEL` | `bge-m3` | Embedding model (1024-dim) |
 | `OLLAMA_NUM_CTX` | `4096` | Context window for the local generation model |
@@ -350,8 +351,9 @@ Configuration is read from environment variables or a `.env` file:
 | `ANTHROPIC_API_KEY` | (empty) | Enables the Anthropic models below when set |
 | `ANTHROPIC_MODELS` | `anthropic/claude-haiku-4-5,anthropic/claude-sonnet-5-5` | Hosted models shown once a key is set |
 | `POLICY_SIMILARITY_THRESHOLD` | `0.5` | Minimum cosine similarity for retrieval |
+| `PROMPT_VERSION` | `v2` | Versioned system prompt (files under `prompts/system_prompt_<version>.md`) |
 | `SHOW_AGENT_STEPS` | `true` | Default state of the **Modo debug** chat setting |
-| `CHAINLIT_DB_URL` | (empty) | Enables thread persistence/resume when set (async SQLAlchemy URL) |
+| `CHAINLIT_DB_URL` | `postgresql+asyncpg://emporium:emporium@db:5432/emporium` | Thread persistence/resume (async SQLAlchemy URL). Leave unset to disable persistence |
 | `CHAINLIT_ADMIN_USER` | `admin` | Identifier used for the automatic local admin sign-in |
 | `CHAINLIT_AUTH_SECRET` | `change-me-in-production` | Secret used to sign UI session cookies |
 

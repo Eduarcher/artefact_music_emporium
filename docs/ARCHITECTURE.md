@@ -235,4 +235,4 @@ A `pytest` suite covers CSV ingestion idempotency, customer-scoped tool isolatio
 - The raw source data may contain contradictions that are not corrected.
 - Complaint registration and human handoff are not yet represented by a tool or external queue; the decision is tracked in [OPEN_QUESTIONS.md](./OPEN_QUESTIONS.md).
 - Compression, caching, response validation, and reranking are deferred extensions.
-- The exact default generation and embedding models remain configurable decisions until selected and benchmarked.
+- Generation and embedding models are configurable via environment variables. The selected defaults are hosted `anthropic/claude-haiku-4-5` for generation (falling back to local `ollama/qwen3.5:4b`) and BGE-M3 for embeddings; broader cross-provider benchmarking remains future work.

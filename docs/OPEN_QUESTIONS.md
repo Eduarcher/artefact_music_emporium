@@ -28,7 +28,7 @@ Running log of design decisions that are still open, under research, or deferred
 ## 4. Chat history persistence & compression details
 
 - **Question:** Exact schema and strategy for persisting sessions/messages in Postgres, and the compression trigger (token budget, summarization approach).
-- **State:** Full raw transcript persistence is decided. Compression is deferred and, if implemented, must be ephemeral rather than replacing persisted history. Schema and implementation details remain to be defined during the build.
+- **State:** Full raw transcript persistence is decided and implemented (Postgres `sessions` and `messages` tables). Compression is deferred and, if implemented, must be ephemeral rather than replacing persisted history. The compression trigger (token budget, summarization approach) remains to be defined.
 - **Impact:** Transcript persistence is part of the core session design; compression is a non-blocking extension.
 
 ## 5. Answer cache semantics
